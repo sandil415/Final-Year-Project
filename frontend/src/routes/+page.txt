@@ -1,0 +1,444 @@
+<script>
+  import pb from '$lib/pocketbase';
+  import {fade, slide} from 'svelte/transition';
+
+  let email = '';
+  let password = '';
+  let username = '';
+  let isLogin = false;
+  let error = '';
+  let isResetPassword = false;
+
+  async function signup() { 
+    console.log('Hello');
+    error = '';
+    try {
+      const user =await pb.collection('users').create({
+        email,
+        password,
+        passwordConfirm: password,
+        username,
+        role: 'user'
+      });
+
+      console.log('User created', user);
+
+      await pb.collection('users').requestVerification(email);
+
+      alert('Check your email to verify your account!');
+    } catch (e) {
+      const err = /** @type {any} */ (e); 
+      if(err.data?.email?.code === 'validation_not_unique'){
+        error = 'Email already in use. Try loggin in instead.'
+      }
+      else if(err instanceof Error){
+        error = err.message;
+      } else {
+        error = 'Signup failed';
+      }
+    }
+  }
+
+  async function login() {
+    error = '';
+    try{
+      await pb.collection('users').authWithPassword(email, password);
+      alert('Login successful!');
+    } catch(err){
+      if(err instanceof Error){
+        error = err.message;
+      } else{
+        error = 'Login failed';
+      }
+    }
+  }
+
+  async function forgetPassword() {
+    if(!email){
+      error = 'Enter your email first';
+      return;
+    }
+
+    await pb.collection('users').requestPasswordReset(email);
+    alert('Password reset email sent!');
+  }
+</script>
+
+<div class="flex min-h-screen">
+
+  {#if isLogin}
+  <!-- IMAGE PANEL -->
+  <div class="hidden md:flex w-1/2 items-center justify-center bg-primary">
+    <img
+      src="images/Login.jpg"
+      alt="Side visual"
+      class="w-3/4 h-screen rounded-2xl shadow-2xl"
+    />
+  </div>
+
+  <!-- FORM PANEL -->
+  <div class="flex w-full md:w-1/2 justify-center items-center bg-background">
+    <div class="flex flex-col items-start w-full max-w-md p-12">
+        <!-- LOGIN -->
+        <h1 class="title mb-2">Welcome back</h1>
+
+        <p class="text-muted-foreground leading-relaxed mb-8">
+          Order meals you’ll love from everyday cooks.
+          Explore, cook, or sell. All in one place.
+        </p>
+
+        <input
+          type="email"
+          placeholder="Email"
+          bind:value={email}
+          class="w-full rounded-lg border border-border bg-white
+                 px-4 py-3 text-black placeholder:text-gray-500
+                 focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+        />
+
+        <input
+          type="password"
+          placeholder="Password"
+          bind:value={password}
+          class="w-full rounded-lg border border-border bg-white
+                 px-4 py-3 text-black placeholder:text-gray-500
+                 focus:outline-none focus:ring-2 focus:ring-primary mb-8"
+        />
+
+        <button
+          class="w-full bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-secondary transition-colors mb-6" 
+          on:click={login}
+        >
+          Log In
+        </button>
+
+        <!-- OR -->
+        <div class="flex items-center gap-4 mb-6 w-full">
+          <div class="h-px flex-1 bg-border"></div>
+          <span class="text-sm text-muted-foreground">OR</span>
+          <div class="h-px flex-1 bg-border"></div>
+        </div>
+
+        <p class="text-sm text-muted-foreground">
+          Don’t have an account?
+          <button
+            class="text-primary underline ml-1"
+            on:click={() => isLogin = false}
+          >
+            Sign up
+          </button>
+
+          <button class="text-sm text-primary underline mt-2" on:click={forgetPassword}>
+              Forgot password?
+          </button>
+        </p>
+      </div>
+    </div>
+
+      {:else}
+
+        <div class="flex w-full md:w-1/2 justify-center items-center bg-background">
+        <div class="flex flex-col items-start w-full max-w-md p-12">
+          <!-- SIGN UP -->
+          <h1 class="title mb-2">Create an account</h1>
+
+          <p class="text-muted-foreground leading-relaxed mb-8">
+            Join a community where anyone can cook,
+            discover dishes, or start selling their own.
+          </p>
+
+          <input
+            type="text"
+            placeholder="Username"
+            bind:value={username}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+          />
+
+          <input
+            type="email"
+            placeholder="Email"
+            bind:value={email}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            bind:value={password}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-8"
+          />
+
+          <button
+            class="w-full bg-primary text-primary-foreground
+                  py-3 rounded-lg font-medium
+                  hover:bg-secondary transition-colors mb-6" on:click={signup}
+          >
+            Sign Up
+          </button>
+
+          <p class="text-sm text-muted-foreground">
+            Already have an account?
+            <button class="text-primary underline ml-1"
+              on:click={() => isLogin = true}>
+              Log in
+            </button>
+
+            <button class="text-sm text-primary underline mt-2" on:click={forgetPassword}>
+              Forgot password?
+            </button>
+          </p>
+      </div>
+    </div>
+
+    <div class="hidden md:flex w-1/2 h-screen items-center justify-center bg-primary">
+      <img src="images/Signup.jpg" alt="Right visual">
+    </div>
+
+    {/if}
+</div>
+
+
+
+
+The actual code
+<script>
+  import pb from '$lib/pocketbase';
+  import {fade, slide} from 'svelte/transition';
+
+  let email = '';
+  let password = '';
+  let username = '';
+  let isLogin = false;
+  let error = '';
+  let isResetPassword = false;
+
+  async function signup() { 
+    console.log('Hello');
+    error = '';
+    try {
+      const user =await pb.collection('users').create({
+        email,
+        password,
+        passwordConfirm: password,
+        username,
+        role: 'user'
+      });
+
+      console.log('User created', user);
+
+      await pb.collection('users').requestVerification(email);
+
+      alert('Check your email to verify your account!');
+    } catch (e) {
+      const err = /** @type {any} */ (e); 
+      if(err.data?.email?.code === 'validation_not_unique'){
+        error = 'Email already in use. Try loggin in instead.'
+      }
+      else if(err instanceof Error){
+        error = err.message;
+      } else {
+        error = 'Signup failed';
+      }
+    }
+  }
+
+  async function login() {
+    error = '';
+    try{
+      await pb.collection('users').authWithPassword(email, password);
+      alert('Login successful!');
+    } catch(err){
+      if(err instanceof Error){
+        error = err.message;
+      } else{
+        error = 'Login failed';
+      }
+    }
+  }
+
+  async function forgetPassword() {
+    if(!email){
+      error = 'Enter your email first';
+      return;
+    }
+
+    await pb.collection('users').requestPasswordReset(email);
+    alert('Password reset email sent!');
+  }
+</script>
+
+<div class="flex min-h-screen">
+
+  {#if isLogin}
+  <!-- IMAGE PANEL -->
+  <div class="hidden md:flex w-1/2 items-center justify-center bg-primary">
+    <img
+      src="images/Login.jpg"
+      alt="Side visual"
+      class="w-3/4 h-screen rounded-2xl shadow-2xl"
+    />
+  </div>
+
+  <!-- FORM PANEL -->
+  <div class="flex w-full md:w-1/2 justify-center items-center bg-background">
+    <div class="flex flex-col items-start w-full max-w-md p-12">
+        <!-- LOGIN -->
+        <h1 class="title mb-2">Welcome back</h1>
+
+        <p class="text-muted-foreground leading-relaxed mb-8">
+          Order meals you’ll love from everyday cooks.
+          Explore, cook, or sell. All in one place.
+        </p>
+
+        <input
+          type="email"
+          placeholder="Email"
+          bind:value={email}
+          class="w-full rounded-lg border border-border bg-white
+                 px-4 py-3 text-black placeholder:text-gray-500
+                 focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+        />
+
+        <input
+          type="password"
+          placeholder="Password"
+          bind:value={password}
+          class="w-full rounded-lg border border-border bg-white
+                 px-4 py-3 text-black placeholder:text-gray-500
+                 focus:outline-none focus:ring-2 focus:ring-primary mb-8"
+        />
+
+        <button
+          class="w-full bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-secondary transition-colors mb-6" 
+          on:click={login}
+        >
+          Log In
+        </button>
+
+        <!-- OR -->
+        <div class="flex items-center gap-4 mb-6 w-full">
+          <div class="h-px flex-1 bg-border"></div>
+          <span class="text-sm text-muted-foreground">OR</span>
+          <div class="h-px flex-1 bg-border"></div>
+        </div>
+
+        <p class="text-sm text-muted-foreground">
+          Don’t have an account?
+          <button
+            class="text-primary underline ml-1"
+            on:click={() => isLogin = false}
+          >
+            Sign up
+          </button>
+
+          <button class="text-sm text-primary underline mt-2" on:click={forgetPassword}>
+              Forgot password?
+          </button>
+        </p>
+      </div>
+    </div>
+
+      {:else}
+
+        <div class="flex w-full md:w-1/2 justify-center items-center bg-background">
+        <div class="flex flex-col items-start w-full max-w-md p-12">
+          <!-- SIGN UP -->
+          <h1 class="title mb-2">Create an account</h1>
+
+          <p class="text-muted-foreground leading-relaxed mb-8">
+            Join a community where anyone can cook,
+            discover dishes, or start selling their own.
+          </p>
+
+          <input
+            type="text"
+            placeholder="Username"
+            bind:value={username}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+          />
+
+          <input
+            type="email"
+            placeholder="Email"
+            bind:value={email}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            bind:value={password}
+            class="w-full rounded-lg border border-border bg-white
+                  px-4 py-3 text-black placeholder:text-gray-500
+                  focus:outline-none focus:ring-2 focus:ring-primary mb-8"
+          />
+
+          <button
+            class="w-full bg-primary text-primary-foreground
+                  py-3 rounded-lg font-medium
+                  hover:bg-secondary transition-colors mb-6" on:click={signup}
+          >
+            Sign Up
+          </button>
+
+          <p class="text-sm text-muted-foreground">
+            Already have an account?
+            <button class="text-primary underline ml-1"
+              on:click={() => isLogin = true}>
+              Log in
+            </button>
+
+            <button class="text-sm text-primary underline mt-2" on:click={forgetPassword}>
+              Forgot password?
+            </button>
+          </p>
+      </div>
+    </div>
+
+    <div class="hidden md:flex w-1/2 h-screen items-center justify-center bg-primary">
+      <img src="images/Signup.jpg" alt="Right visual" class="w-3/4 h-screen rounded-2xl shadow-2xl">
+    </div>
+
+    {/if}
+</div>
+
+
+
+
+
+
+<!-- +layout.svelte or +page.svelte -->
+<div class="min-h-screen ">
+  <header class="border-b border-border p-4">
+    <h1 class="text-2xl font-bold">Your Site</h1>
+  </header>
+  
+  <main class="container mx-auto p-8">
+    <!-- Your content -->
+    <article class="">
+      <h1 class="title">Hello World</h1>
+      <p class="title-content">This is some content that will automatically switch between light and dark mode Lorem ipsum, dolor sit amet consectetur adipisicing elit. Praesentium quas maxime dignissimos voluptatibus saepe doloribus soluta molestiae vel vero fugiat nostrum, rem commodi minima quisquam non sequi. Numquam, eveniet modi?</p>
+    </article>
+    
+    <!-- Cards -->
+    <div class="bg-secondary rounded-lg p-6 mt-4">
+      <h2 class="text-xl font-semibold mb-2">Card Title</h2>
+      <p class="text-muted-foreground">Some muted text here</p>
+    </div>
+    
+    <!-- Buttons -->
+    <button class="bg-primary text-primary-foreground px-4 py-2 rounded-md">
+      Primary Button
+    </button>
+  </main>
+</div>

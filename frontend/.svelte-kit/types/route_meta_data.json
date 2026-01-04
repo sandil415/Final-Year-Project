@@ -1,0 +1,13 @@
+{
+	"/": [],
+	"/auth/login": [],
+	"/auth/signup": [],
+	"/auth/verify/[token]": [],
+	"/home": [],
+	"/messages": [],
+	"/messages/[conversationId]": [],
+	"/profile": [],
+	"/profile/edit": [],
+	"/profile/[username]": [],
+	"/search": []
+}
