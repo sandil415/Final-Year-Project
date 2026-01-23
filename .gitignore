@@ -21,3 +21,18 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# PocketBase 
+Backend/pb_data/
+pb_data/
+frontend/pb_data/
+Backend/pocketbase
+
+# SQLite 
+*.db
+*.db-wal
+*.db-shm
+
+# SvelteKit / Frontend 
+frontend/.svelte-kit/
+node_modules/

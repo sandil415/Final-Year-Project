@@ -14,6 +14,7 @@
   let followRecordId = null;
 
   // Stats
+  let postsCount = 0;
   let followersCount = 0;
   let followingCount = 0;
 
@@ -21,10 +22,7 @@
     requireAuth();
     currentUser = pb.authStore.model;
     
-    // Get username from URL (if exists) or use current user
     const username = $page.params?.username || currentUser.username;
-    
-    // Check if viewing own profile
     isOwnProfile = username === currentUser.username;
     
     if (isOwnProfile) {
@@ -36,6 +34,7 @@
 
     if (user) {
       await loadFollowData();
+      await loadPostsCount();
     }
   });
 
@@ -61,19 +60,16 @@
 
   async function loadFollowData() {
     try {
-      // Load followers count
       const followersData = await pb.collection('follows').getList(1, 1, {
         filter: `following = "${user.id}"`
       });
       followersCount = followersData.totalItems;
 
-      // Load following count
       const followingData = await pb.collection('follows').getList(1, 1, {
         filter: `follower = "${user.id}"`
       });
       followingCount = followingData.totalItems;
 
-      // Check if current user follows this profile
       if (!isOwnProfile) {
         const followCheck = await pb.collection('follows').getList(1, 1, {
           filter: `follower = "${currentUser.id}" && following = "${user.id}"`
@@ -89,51 +85,113 @@
     }
   }
 
-  async function toggleFollow() {
-    if (isFollowing) {
-      // Unfollow
-      try {
-        await pb.collection('follows').delete(followRecordId);
+  async function loadPostsCount() {
+    try {
+      postsCount = 0; // Placeholder for now
+    } catch (err) {
+      console.error('Failed to load posts count:', err);
+    }
+  }
+
+  // Function to reset followers
+  async function resetFollowState() {
+    try {
+      const followCheck = await pb.collection('follows').getList(1, 1, {
+        filter: `follower = "${currentUser.id}" && following = "${user.id}"`
+      });
+      
+      if (followCheck.items.length > 0) {
+        isFollowing = true;
+        followRecordId = followCheck.items[0].id;
+      } else {
         isFollowing = false;
         followRecordId = null;
-        followersCount--;
-        
-        // Update user's follower count
-        await pb.collection('users').update(user.id, {
-          'followers-': 1
-        });
-      } catch (err) {
-        console.error('Failed to unfollow:', err);
-        alert('Failed to unfollow. Please try again.');
       }
-    } else {
-      // Follow
-      try {
-        const newFollow = await pb.collection('follows').create({
-          follower: currentUser.id,
-          following: user.id
-        });
-        
-        isFollowing = true;
-        followRecordId = newFollow.id;
-        followersCount++;
-        
-        // Update user's follower count
-        await pb.collection('users').update(user.id, {
-          'followers+': 1
-        });
-      } catch (err) {
-        console.error('Failed to follow:', err);
-        alert('Failed to follow. Please try again.');
+      
+      await loadFollowData(); // Refresh counts
+    } catch (err) {
+      console.error('Failed to reset follow state:', err);
+    }
+  }
+
+  // Function to follow along with reset
+  async function toggleFollow() { 
+  console.log('Toggle follow clicked');
+  console.log('Current user:', currentUser?.id, currentUser?.username);
+  console.log('Profile user:', user?.id, user?.username);
+  console.log('Is following:', isFollowing);
+
+  if (isFollowing) { 
+    // UNFOLLOW
+    try {
+      console.log('Attempting to unfollow, record ID:', followRecordId);
+      
+      await pb.collection('follows').delete(followRecordId);
+      
+      console.log('Unfollow successful');
+      
+      // Update state directly - no need to query
+      isFollowing = false;
+      followRecordId = null;
+      followersCount = Math.max(0, followersCount - 1);
+      
+    } catch (err) {
+      console.error('Failed to unfollow:', err);
+      console.error('Error details:', err.response?.data);
+      alert('Failed to unfollow. Please try again.');
+    }
+  } else {
+    // FOLLOW
+    try {
+      console.log('Attempting to follow...');
+      
+      const newFollow = await pb.collection('follows').create({
+        follower: currentUser.id,
+        following: user.id
+      });
+      
+      console.log('Follow record created:', newFollow);
+      
+      // Update state directly with the new record
+      isFollowing = true;
+      followRecordId = newFollow.id;
+      followersCount += 1;
+      
+      console.log('Creating notification...');
+      
+      // Create notification AFTER updating state
+      await pb.collection('notifications').create({
+        user: user.id,
+        triggeredBy: currentUser.id,
+        type: 'follow',
+        message: `${currentUser.username} started following you.`,
+        read: false
+      });
+      
+      console.log('Follow and notification successful');
+
+    } catch (err) {
+      // console.error('Failed to follow:', err);
+      console.error('Error details:', err.response);
+      console.error('Error data:', err.response?.data);
+      
+      const errorMsg = err.response?.data?.message || err.message || 'Unknown error';
+      // alert(`Failed to follow: ${errorMsg}`);
+      
+      // If follow succeeded but notification failed, keep the follow
+      // Only reset if the follow itself failed
+      if (!followRecordId) {
+        isFollowing = false;
+        followersCount = Math.max(0, followersCount - 1);
       }
     }
   }
+}
 
   async function messageUser() {
     if (!currentUser || !user) return;
 
     try {
-      // Check if conversation already exists
       const existing = await pb.collection('conversations').getList(1, 1, {
         filter: `
           participants.id ?= "${currentUser.id}" &&
@@ -146,7 +204,6 @@
         return;
       }
 
-      // Create new conversation
       const conversation = await pb.collection('conversations').create({
         participants: [currentUser.id, user.id],
         lastMessage: '',
@@ -171,7 +228,6 @@
       </div>
     {:else if user}
       <div class="max-w-4xl mx-auto p-10">
-        <!-- HEADER -->
         <div class="flex gap-10 items-center">
           <img
             src={user.avatar
@@ -210,9 +266,8 @@
               {/if}
             </div>
 
-            <!-- COUNTS -->
             <div class="flex gap-6 mt-4 text-sm">
-              <span><strong>0</strong> posts</span>
+              <span><strong>{postsCount}</strong> posts</span>
               <button class="hover:opacity-70">
                 <strong>{followersCount}</strong> followers
               </button>
@@ -227,7 +282,6 @@
           </div>
         </div>
 
-        <!-- EMPTY POSTS STATE -->
         <div class="mt-24 flex flex-col items-center text-center text-muted-foreground">
           <div class="w-14 h-14 rounded-full border flex items-center justify-center mb-6">
             📷
