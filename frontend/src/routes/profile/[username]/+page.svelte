@@ -1,5 +1,6 @@
 <script>
   import Sidebar from '$lib/components/Sidebar.svelte';
+  import PostModal from '$lib/components/PostModal.svelte';
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
@@ -13,8 +14,13 @@
   let isFollowing = false;
   let followRecordId = null;
 
-  // Stats
+  // Posts data
+  let posts = [];
   let postsCount = 0;
+  let loadingPosts = true;
+  let selectedPostId = null;
+
+  // Stats
   let followersCount = 0;
   let followingCount = 0;
 
@@ -34,7 +40,7 @@
 
     if (user) {
       await loadFollowData();
-      await loadPostsCount();
+      await loadPosts(); // Actually load the posts!
     }
   });
 
@@ -85,108 +91,92 @@
     }
   }
 
-  async function loadPostsCount() {
+  // FIXED: Actually load posts from database
+  async function loadPosts() {
     try {
-      postsCount = 0; // Placeholder for now
+      loadingPosts = true;
+      const result = await pb.collection('posts').getList(1, 50, {
+        filter: `user = "${user.id}"`,
+        sort: '-created',
+      });
+
+      posts = result.items;
+      postsCount = result.totalItems;
+      console.log('Loaded posts:', posts);
     } catch (err) {
-      console.error('Failed to load posts count:', err);
+      console.error('Failed to load posts:', err);
+      posts = [];
+      postsCount = 0;
+    } finally {
+      loadingPosts = false;
     }
   }
 
-  // Function to reset followers
-  async function resetFollowState() {
-    try {
-      const followCheck = await pb.collection('follows').getList(1, 1, {
-        filter: `follower = "${currentUser.id}" && following = "${user.id}"`
-      });
-      
-      if (followCheck.items.length > 0) {
-        isFollowing = true;
-        followRecordId = followCheck.items[0].id;
-      } else {
+  async function toggleFollow() { 
+    console.log('Toggle follow clicked');
+    console.log('Current user:', currentUser?.id, currentUser?.username);
+    console.log('Profile user:', user?.id, user?.username);
+    console.log('Is following:', isFollowing);
+
+    if (isFollowing) { 
+      // UNFOLLOW
+      try {
+        console.log('Attempting to unfollow, record ID:', followRecordId);
+        
+        await pb.collection('follows').delete(followRecordId);
+        
+        console.log('Unfollow successful');
+        
         isFollowing = false;
         followRecordId = null;
-      }
-      
-      await loadFollowData(); // Refresh counts
-    } catch (err) {
-      console.error('Failed to reset follow state:', err);
-    }
-  }
-
-  // Function to follow along with reset
-  async function toggleFollow() { 
-  console.log('Toggle follow clicked');
-  console.log('Current user:', currentUser?.id, currentUser?.username);
-  console.log('Profile user:', user?.id, user?.username);
-  console.log('Is following:', isFollowing);
-
-  if (isFollowing) { 
-    // UNFOLLOW
-    try {
-      console.log('Attempting to unfollow, record ID:', followRecordId);
-      
-      await pb.collection('follows').delete(followRecordId);
-      
-      console.log('Unfollow successful');
-      
-      // Update state directly - no need to query
-      isFollowing = false;
-      followRecordId = null;
-      followersCount = Math.max(0, followersCount - 1);
-      
-    } catch (err) {
-      console.error('Failed to unfollow:', err);
-      console.error('Error details:', err.response?.data);
-      alert('Failed to unfollow. Please try again.');
-    }
-  } else {
-    // FOLLOW
-    try {
-      console.log('Attempting to follow...');
-      
-      const newFollow = await pb.collection('follows').create({
-        follower: currentUser.id,
-        following: user.id
-      });
-      
-      console.log('Follow record created:', newFollow);
-      
-      // Update state directly with the new record
-      isFollowing = true;
-      followRecordId = newFollow.id;
-      followersCount += 1;
-      
-      console.log('Creating notification...');
-      
-      // Create notification AFTER updating state
-      await pb.collection('notifications').create({
-        user: user.id,
-        triggeredBy: currentUser.id,
-        type: 'follow',
-        message: `${currentUser.username} started following you.`,
-        read: false
-      });
-      
-      console.log('Follow and notification successful');
-
-    } catch (err) {
-      // console.error('Failed to follow:', err);
-      console.error('Error details:', err.response);
-      console.error('Error data:', err.response?.data);
-      
-      const errorMsg = err.response?.data?.message || err.message || 'Unknown error';
-      // alert(`Failed to follow: ${errorMsg}`);
-      
-      // If follow succeeded but notification failed, keep the follow
-      // Only reset if the follow itself failed
-      if (!followRecordId) {
-        isFollowing = false;
         followersCount = Math.max(0, followersCount - 1);
+        
+      } catch (err) {
+        console.error('Failed to unfollow:', err);
+        console.error('Error details:', err.response?.data);
+        alert('Failed to unfollow. Please try again.');
+      }
+    } else {
+      // FOLLOW
+      try {
+        console.log('Attempting to follow...');
+        
+        const newFollow = await pb.collection('follows').create({
+          follower: currentUser.id,
+          following: user.id
+        });
+        
+        console.log('Follow record created:', newFollow);
+        
+        isFollowing = true;
+        followRecordId = newFollow.id;
+        followersCount += 1;
+        
+        console.log('Creating notification...');
+        
+        await pb.collection('notifications').create({
+          user: user.id,
+          triggeredBy: currentUser.id,
+          type: 'follow',
+          message: `${currentUser.username} started following you.`,
+          read: false
+        });
+        
+        console.log('Follow and notification successful');
+
+      } catch (err) {
+        console.error('Error details:', err.response);
+        console.error('Error data:', err.response?.data);
+        
+        const errorMsg = err.response?.data?.message || err.message || 'Unknown error';
+        
+        if (!followRecordId) {
+          isFollowing = false;
+          followersCount = Math.max(0, followersCount - 1);
+        }
       }
     }
   }
-}
 
   async function messageUser() {
     if (!currentUser || !user) return;
@@ -215,6 +205,15 @@
       console.error('Failed to start conversation:', err);
       alert('Failed to start conversation. Please try again.');
     }
+  }
+
+  function openPost(postId) {
+    selectedPostId = postId;
+  }
+
+  function closePost() {
+    selectedPostId = null;
+    loadPosts(); // Reload posts to update like/comment counts
   }
 </script>
 
@@ -282,19 +281,69 @@
           </div>
         </div>
 
-        <div class="mt-24 flex flex-col items-center text-center text-muted-foreground">
-          <div class="w-14 h-14 rounded-full border flex items-center justify-center mb-6">
-            📷
+        <!-- DIVIDER -->
+        <div class="border-t mt-10 mb-6"></div>
+
+        <!-- POSTS SECTION -->
+        {#if loadingPosts}
+          <div class="text-center py-20">
+            <p class="text-muted-foreground">Loading posts...</p>
           </div>
-          <h2 class="text-xl font-semibold text-foreground mb-2">
-            {isOwnProfile ? 'Share photos' : 'No posts yet'}
-          </h2>
-          <p>
-            {isOwnProfile 
-              ? "When you share photos, they'll appear on your profile." 
-              : `${user.username} hasn't shared any photos yet.`}
-          </p>
-        </div>
+        {:else if postsCount === 0}
+          <!-- EMPTY STATE -->
+          <div class="flex flex-col items-center mt-20 text-center">
+            <div class="w-16 h-16 border rounded-full flex items-center justify-center mb-6 text-3xl">
+              📷
+            </div>
+
+            <h2 class="text-xl font-semibold mb-2">
+              {isOwnProfile ? 'Share photos' : 'No posts yet'}
+            </h2>
+
+            <p class="text-muted-foreground mb-4">
+              {isOwnProfile 
+                ? "When you share photos, they'll appear on your profile." 
+                : `${user.username} hasn't shared any photos yet.`}
+            </p>
+
+            {#if isOwnProfile}
+              <a 
+                href="/create"
+                class="text-primary font-medium hover:underline"
+              >
+                Share your first photo
+              </a>
+            {/if}
+          </div>
+        {:else}
+          <!-- POSTS GRID -->
+          <div class="grid grid-cols-3 gap-1 md:gap-4">
+            {#each posts as post}
+              <button
+                class="aspect-square bg-muted rounded-sm overflow-hidden hover:opacity-90 transition-opacity relative group"
+                on:click={() => openPost(post.id)}
+              >
+                <img
+                  src={pb.files.getUrl(post, post.image)}
+                  alt={post.caption || 'Post'}
+                  class="w-full h-full object-cover"
+                />
+                
+                <!-- Hover overlay -->
+                <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 text-white font-semibold">
+                  <span class="flex items-center gap-2">
+                    <span class="text-xl">❤️</span>
+                    <span>0</span>
+                  </span>
+                  <span class="flex items-center gap-2">
+                    <span class="text-xl">💬</span>
+                    <span>0</span>
+                  </span>
+                </div>
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="max-w-4xl mx-auto p-10 text-center py-20">
@@ -303,3 +352,8 @@
     {/if}
   </main>
 </div>
+
+<!-- Post Modal -->
+{#if selectedPostId}
+  <PostModal postId={selectedPostId} onClose={closePost} />
+{/if}

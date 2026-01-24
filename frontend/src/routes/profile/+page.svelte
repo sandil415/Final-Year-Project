@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { requireAuth } from '$lib/auth';
   import Sidebar from '$lib/components/Sidebar.svelte';
+  import PostModal from '$lib/components/PostModal.svelte';
   import { goto } from '$app/navigation';
 
   let user;
@@ -11,6 +12,7 @@
   let followersCount = 0;
   let followingCount = 0;
   let loadingPosts = true;
+  let selectedPostId = null;
 
   onMount(async () => {
     requireAuth();
@@ -42,13 +44,11 @@
 
   async function loadStats() {
     try {
-      // Load followers
       const followersData = await pb.collection('follows').getList(1, 1, {
         filter: `following = "${user.id}"`
       });
       followersCount = followersData.totalItems;
 
-      // Load following
       const followingData = await pb.collection('follows').getList(1, 1, {
         filter: `follower = "${user.id}"`
       });
@@ -58,9 +58,14 @@
     }
   }
 
-  function viewPost(postId) {
-    // Navigate to post detail page (you'll need to create this route)
-    goto(`/post/${postId}`);
+  function openPost(postId) {
+    selectedPostId = postId;
+  }
+
+  function closePost() {
+    selectedPostId = null;
+    // Optionally reload posts to update counts
+    loadPosts();
   }
 </script>
 
@@ -145,7 +150,7 @@
           {#each posts as post}
             <button
               class="aspect-square bg-muted rounded-sm overflow-hidden hover:opacity-90 transition-opacity relative group"
-              on:click={() => viewPost(post.id)}
+              on:click={() => openPost(post.id)}
             >
               <img
                 src={pb.files.getUrl(post, post.image)}
@@ -153,13 +158,16 @@
                 class="w-full h-full object-cover"
               />
               
-              <!-- Hover overlay with caption preview -->
-              <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-4">
-                {#if post.caption}
-                  <p class="text-white text-sm line-clamp-3 text-center">
-                    {post.caption}
-                  </p>
-                {/if}
+              <!-- Hover overlay with stats -->
+              <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 text-white font-semibold">
+                <span class="flex items-center gap-2">
+                  <span class="text-xl">❤️</span>
+                  <span>0</span>
+                </span>
+                <span class="flex items-center gap-2">
+                  <span class="text-xl">💬</span>
+                  <span>0</span>
+                </span>
               </div>
             </button>
           {/each}
@@ -168,4 +176,9 @@
     </div>
   </main>
 </div>
+
+<!-- Post Modal -->
+{#if selectedPostId}
+  <PostModal postId={selectedPostId} onClose={closePost} />
+{/if}
 {/if}
