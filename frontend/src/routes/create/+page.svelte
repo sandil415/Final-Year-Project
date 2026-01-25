@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
+  import { Camera } from 'lucide-svelte';
 
   let user = null;
   let selectedFile = null;
@@ -178,8 +179,8 @@
           on:keypress={(e) => e.key === 'Enter' && triggerFileInput()}
         >
           <div class="flex flex-col items-center gap-4">
-            <div class="w-20 h-20 rounded-full bg-muted flex items-center justify-center text-4xl">
-              📷
+            <div class="w-20 h-20 rounded-full bg-muted flex items-center justify-center">
+              <Camera class="w-10 h-10 text-muted-foreground" />
             </div>
             <div>
               <h2 class="text-xl font-medium mb-2">Drag photos here</h2>

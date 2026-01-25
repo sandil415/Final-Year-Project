@@ -39,6 +39,7 @@
 	},
 	"dependencies": {
 		"daisyui": "^5.5.11",
+		"lucide-svelte": "^0.563.0",
 		"pocketbase": "^0.26.5"
 	}
 }

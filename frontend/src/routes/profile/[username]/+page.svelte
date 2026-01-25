@@ -6,6 +6,7 @@
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import { page } from '$app/stores';
+  import { Camera, Heart, MessageCircle } from 'lucide-svelte';
 
   let user = null;
   let loading = true;
@@ -19,6 +20,7 @@
   let postsCount = 0;
   let loadingPosts = true;
   let selectedPostId = null;
+  let postStats = {}; // Store likes and comments count for each post
 
   // Stats
   let followersCount = 0;
@@ -40,7 +42,7 @@
 
     if (user) {
       await loadFollowData();
-      await loadPosts(); // Actually load the posts!
+      await loadPosts();
     }
   });
 
@@ -91,7 +93,6 @@
     }
   }
 
-  // FIXED: Actually load posts from database
   async function loadPosts() {
     try {
       loadingPosts = true;
@@ -102,6 +103,10 @@
 
       posts = result.items;
       postsCount = result.totalItems;
+      
+      // Load stats for each post
+      await loadPostsStats();
+      
       console.log('Loaded posts:', posts);
     } catch (err) {
       console.error('Failed to load posts:', err);
@@ -112,6 +117,32 @@
     }
   }
 
+  async function loadPostsStats() {
+    // Load likes and comments count for all posts
+    for (const post of posts) {
+      try {
+        const [likesResult, commentsResult] = await Promise.all([
+          pb.collection('likes').getList(1, 1, {
+            filter: `post = "${post.id}"`
+          }),
+          pb.collection('comments').getList(1, 1, {
+            filter: `post = "${post.id}"`
+          })
+        ]);
+        
+        postStats[post.id] = {
+          likes: likesResult.totalItems,
+          comments: commentsResult.totalItems
+        };
+      } catch (err) {
+        console.error('Failed to load stats for post:', post.id, err);
+        postStats[post.id] = { likes: 0, comments: 0 };
+      }
+    }
+    // Force reactivity
+    postStats = postStats;
+  }
+
   async function toggleFollow() { 
     console.log('Toggle follow clicked');
     console.log('Current user:', currentUser?.id, currentUser?.username);
@@ -119,7 +150,6 @@
     console.log('Is following:', isFollowing);
 
     if (isFollowing) { 
-      // UNFOLLOW
       try {
         console.log('Attempting to unfollow, record ID:', followRecordId);
         
@@ -137,7 +167,6 @@
         alert('Failed to unfollow. Please try again.');
       }
     } else {
-      // FOLLOW
       try {
         console.log('Attempting to follow...');
         
@@ -215,6 +244,14 @@
     selectedPostId = null;
     loadPosts(); // Reload posts to update like/comment counts
   }
+
+  function handlePostDeleted(deletedPostId) {
+    // Remove the deleted post from the local state
+    posts = posts.filter(p => p.id !== deletedPostId);
+    postsCount = Math.max(0, postsCount - 1);
+    delete postStats[deletedPostId];
+    console.log('Post deleted successfully');
+  }
 </script>
 
 <div class="h-screen flex bg-background text-foreground overflow-hidden">
@@ -238,11 +275,11 @@
 
           <div class="flex-1">
             <div class="flex items-center gap-6">
-              <h1 class="text-xl font-semibold">{user.username}</h1>
+              <h1 class="text-xl font-semibold text-foreground">{user.username}</h1>
 
               {#if isOwnProfile}
                 <button
-                  class="border px-4 py-1 rounded-lg text-sm hover:bg-muted"
+                  class="border border-border text-foreground px-4 py-1 rounded-lg text-sm hover:bg-muted transition-colors"
                   on:click={() => goto('/profile/edit')}
                 >
                   Edit profile
@@ -250,13 +287,13 @@
               {:else}
                 <div class="flex gap-2">
                   <button 
-                    class="{isFollowing ? 'border' : 'bg-primary text-primary-foreground'} px-6 py-1 rounded-lg hover:opacity-90 text-sm"
+                    class="{isFollowing ? 'border border-border text-foreground hover:bg-muted' : 'bg-primary text-primary-foreground'} px-6 py-1 rounded-lg hover:opacity-90 text-sm transition-colors"
                     on:click={toggleFollow}
                   >
                     {isFollowing ? 'Following' : 'Follow'}
                   </button>
                   <button 
-                    class="border px-4 py-1 rounded-lg hover:bg-muted text-sm" 
+                    class="border border-border text-foreground px-4 py-1 rounded-lg hover:bg-muted text-sm transition-colors" 
                     on:click={messageUser}
                   >
                     Message
@@ -266,11 +303,11 @@
             </div>
 
             <div class="flex gap-6 mt-4 text-sm">
-              <span><strong>{postsCount}</strong> posts</span>
-              <button class="hover:opacity-70">
+              <span class="text-foreground"><strong>{postsCount}</strong> posts</span>
+              <button class="hover:opacity-70 text-foreground">
                 <strong>{followersCount}</strong> followers
               </button>
-              <button class="hover:opacity-70">
+              <button class="hover:opacity-70 text-foreground">
                 <strong>{followingCount}</strong> following
               </button>
             </div>
@@ -282,7 +319,7 @@
         </div>
 
         <!-- DIVIDER -->
-        <div class="border-t mt-10 mb-6"></div>
+        <div class="border-t border-border mt-10 mb-6"></div>
 
         <!-- POSTS SECTION -->
         {#if loadingPosts}
@@ -292,11 +329,11 @@
         {:else if postsCount === 0}
           <!-- EMPTY STATE -->
           <div class="flex flex-col items-center mt-20 text-center">
-            <div class="w-16 h-16 border rounded-full flex items-center justify-center mb-6 text-3xl">
-              📷
+            <div class="w-16 h-16 border border-border rounded-full flex items-center justify-center mb-6">
+              <Camera class="w-8 h-8 text-muted-foreground" />
             </div>
 
-            <h2 class="text-xl font-semibold mb-2">
+            <h2 class="text-xl font-semibold mb-2 text-foreground">
               {isOwnProfile ? 'Share photos' : 'No posts yet'}
             </h2>
 
@@ -332,12 +369,12 @@
                 <!-- Hover overlay -->
                 <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 text-white font-semibold">
                   <span class="flex items-center gap-2">
-                    <span class="text-xl">❤️</span>
-                    <span>0</span>
+                    <Heart class="w-5 h-5 fill-white" />
+                    <span>{postStats[post.id]?.likes || 0}</span>
                   </span>
                   <span class="flex items-center gap-2">
-                    <span class="text-xl">💬</span>
-                    <span>0</span>
+                    <MessageCircle class="w-5 h-5" />
+                    <span>{postStats[post.id]?.comments || 0}</span>
                   </span>
                 </div>
               </button>
@@ -355,5 +392,9 @@
 
 <!-- Post Modal -->
 {#if selectedPostId}
-  <PostModal postId={selectedPostId} onClose={closePost} />
+  <PostModal 
+    postId={selectedPostId} 
+    onClose={closePost}
+    onDelete={handlePostDeleted}
+  />
 {/if}

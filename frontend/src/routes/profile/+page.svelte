@@ -5,6 +5,7 @@
   import Sidebar from '$lib/components/Sidebar.svelte';
   import PostModal from '$lib/components/PostModal.svelte';
   import { goto } from '$app/navigation';
+  import { Camera, Heart, MessageCircle } from 'lucide-svelte';
 
   let user;
   let posts = [];
@@ -13,6 +14,7 @@
   let followingCount = 0;
   let loadingPosts = true;
   let selectedPostId = null;
+  let postStats = {}; // Store likes and comments count for each post
 
   onMount(async () => {
     requireAuth();
@@ -34,12 +36,42 @@
 
       posts = result.items;
       postsCount = result.totalItems;
+      
+      // Load stats for each post
+      await loadPostsStats();
+      
       console.log('Loaded posts:', posts);
     } catch (err) {
       console.error('Failed to load posts:', err);
     } finally {
       loadingPosts = false;
     }
+  }
+
+  async function loadPostsStats() {
+    // Load likes and comments count for all posts
+    for (const post of posts) {
+      try {
+        const [likesResult, commentsResult] = await Promise.all([
+          pb.collection('likes').getList(1, 1, {
+            filter: `post = "${post.id}"`
+          }),
+          pb.collection('comments').getList(1, 1, {
+            filter: `post = "${post.id}"`
+          })
+        ]);
+        
+        postStats[post.id] = {
+          likes: likesResult.totalItems,
+          comments: commentsResult.totalItems
+        };
+      } catch (err) {
+        console.error('Failed to load stats for post:', post.id, err);
+        postStats[post.id] = { likes: 0, comments: 0 };
+      }
+    }
+    // Force reactivity
+    postStats = postStats;
   }
 
   async function loadStats() {
@@ -64,8 +96,16 @@
 
   function closePost() {
     selectedPostId = null;
-    // Optionally reload posts to update counts
+    // Reload posts to update counts
     loadPosts();
+  }
+
+  function handlePostDeleted(deletedPostId) {
+    // Remove the deleted post from the local state
+    posts = posts.filter(p => p.id !== deletedPostId);
+    postsCount = Math.max(0, postsCount - 1);
+    delete postStats[deletedPostId];
+    console.log('Post deleted successfully');
   }
 </script>
 
@@ -87,11 +127,11 @@
 
         <div class="flex-1">
           <div class="flex items-center gap-6">
-            <h1 class="text-xl font-semibold">{user.username}</h1>
+            <h1 class="text-xl font-semibold text-foreground">{user.username}</h1>
 
             <a
               href="/profile/edit"
-              class="border px-4 py-1 rounded-lg text-sm hover:bg-muted"
+              class="border border-border text-foreground px-4 py-1 rounded-lg text-sm hover:bg-muted transition-colors"
             >
               Edit profile
             </a>
@@ -99,11 +139,11 @@
 
           <!-- COUNTS -->
           <div class="flex gap-6 mt-4 text-sm">
-            <span><b>{postsCount}</b> posts</span>
-            <button class="hover:opacity-70">
+            <span class="text-foreground"><b>{postsCount}</b> posts</span>
+            <button class="hover:opacity-70 text-foreground">
               <b>{followersCount}</b> followers
             </button>
-            <button class="hover:opacity-70">
+            <button class="hover:opacity-70 text-foreground">
               <b>{followingCount}</b> following
             </button>
           </div>
@@ -115,7 +155,7 @@
       </div>
 
       <!-- DIVIDER -->
-      <div class="border-t mt-10 mb-6"></div>
+      <div class="border-t border-border mt-10 mb-6"></div>
 
       <!-- POSTS SECTION -->
       {#if loadingPosts}
@@ -125,11 +165,11 @@
       {:else if postsCount === 0}
         <!-- EMPTY STATE -->
         <div class="flex flex-col items-center mt-20 text-center">
-          <div class="w-16 h-16 border rounded-full flex items-center justify-center mb-6 text-3xl">
-            📷
+          <div class="w-16 h-16 border border-border rounded-full flex items-center justify-center mb-6">
+            <Camera class="w-8 h-8 text-muted-foreground" />
           </div>
 
-          <h2 class="text-xl font-semibold mb-2">
+          <h2 class="text-xl font-semibold mb-2 text-foreground">
             Share photos
           </h2>
 
@@ -161,12 +201,12 @@
               <!-- Hover overlay with stats -->
               <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 text-white font-semibold">
                 <span class="flex items-center gap-2">
-                  <span class="text-xl">❤️</span>
-                  <span>0</span>
+                  <Heart class="w-5 h-5 fill-white" />
+                  <span>{postStats[post.id]?.likes || 0}</span>
                 </span>
                 <span class="flex items-center gap-2">
-                  <span class="text-xl">💬</span>
-                  <span>0</span>
+                  <MessageCircle class="w-5 h-5" />
+                  <span>{postStats[post.id]?.comments || 0}</span>
                 </span>
               </div>
             </button>
@@ -179,6 +219,10 @@
 
 <!-- Post Modal -->
 {#if selectedPostId}
-  <PostModal postId={selectedPostId} onClose={closePost} />
+  <PostModal 
+    postId={selectedPostId} 
+    onClose={closePost}
+    onDelete={handlePostDeleted}
+  />
 {/if}
 {/if}
