@@ -172,10 +172,17 @@
   }
 </script>
 
-<div class="min-h-screen bg-background flex">
-  <Sidebar />
+<!-- CHANGE 1: Changed min-h-screen to h-screen -->
+<!-- CHANGE 2: Added overflow-hidden to prevent outer scroll -->
+<div class="h-screen bg-background flex overflow-hidden">
+  <!-- CHANGE 3: Wrapped Sidebar in a container with w-64, flex-shrink-0, and overflow-y-auto -->
+  <!-- This prevents the sidebar from expanding and makes it independently scrollable -->
+  <div class="w-64 border-r border-border flex-shrink-0 overflow-y-auto">
+    <Sidebar />
+  </div>
 
-  <!-- MAIN FEED AREA -->
+  <!-- MAIN FEED AREA - Only this section scrolls -->
+  <!-- CHANGE 4: Main content has overflow-y-auto so only it scrolls -->
   <main class="flex-1 flex justify-center overflow-y-auto">
     <div class="w-full max-w-[470px] py-8 px-4">
       {#if loading}
@@ -326,9 +333,10 @@
     </div>
   </main>
 
-  <!-- RIGHT SIDEBAR (Empty for now) -->
-  <aside class="hidden xl:block w-80 border-l border-border p-6">
-    <div class="sticky top-6">
+  <!-- RIGHT SIDEBAR -->
+  <!-- CHANGE 5: Wrapped right sidebar in container with flex-shrink-0 and overflow-y-auto -->
+  <aside class="hidden xl:block w-80 border-l border-border flex-shrink-0 overflow-y-auto">
+    <div class="p-6">
       <h3 class="text-sm font-semibold text-muted-foreground mb-4">
         Suggestions for you
       </h3>

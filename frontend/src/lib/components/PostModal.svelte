@@ -207,6 +207,25 @@
     }
   }
 
+  // ✅ NEW: Delete comment function
+  async function deleteComment(commentId) {
+    const confirmDelete = confirm('Are you sure you want to delete this comment?');
+    
+    if (!confirmDelete) return;
+
+    try {
+      await pb.collection('comments').delete(commentId);
+      
+      // Remove from local state
+      comments = comments.filter(c => c.id !== commentId);
+      
+      console.log('Comment deleted successfully');
+    } catch (err) {
+      console.error('Failed to delete comment:', err);
+      alert('Failed to delete comment. Please try again.');
+    }
+  }
+
   function focusCommentInput() {
     if (commentInputRef) {
       commentInputRef.focus();
@@ -328,7 +347,7 @@
           {/if}
 
           {#each comments as comment}
-            <div class="flex gap-3">
+            <div class="flex gap-3 group relative">
               <img
                 src={comment.expand?.user?.avatar
                   ? pb.files.getUrl(comment.expand.user, comment.expand.user.avatar)
@@ -337,11 +356,25 @@
                 class="w-8 h-8 rounded-full object-cover flex-shrink-0"
               />
               <div class="flex-1 min-w-0">
-                <div>
-                  <a href="/profile/{comment.expand?.user?.username}" class="font-semibold hover:opacity-70 text-foreground" on:click={onClose}>
-                    {comment.expand?.user?.username}
-                  </a>
-                  <span class="ml-2 text-foreground">{comment.text}</span>
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex-1">
+                    <a href="/profile/{comment.expand?.user?.username}" class="font-semibold hover:opacity-70 text-foreground" on:click={onClose}>
+                      {comment.expand?.user?.username}
+                    </a>
+                    <span class="ml-2 text-foreground">{comment.text}</span>
+                  </div>
+                  
+                  <!-- ✅ Delete button with Trash2 icon (only show for comment owner) -->
+                  {#if comment.user === currentUser.id}
+                    <button
+                      on:click={() => deleteComment(comment.id)}
+                      class="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-red-500/10 rounded-full"
+                      aria-label="Delete comment"
+                      title="Delete comment"
+                    >
+                      <Trash2 class="w-4 h-4 text-red-500" strokeWidth={2} />
+                    </button>
+                  {/if}
                 </div>
                 <p class="text-xs text-muted-foreground mt-1">{formatDate(comment.created)}</p>
               </div>
