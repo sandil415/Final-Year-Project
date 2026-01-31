@@ -1,9 +1,11 @@
 <script>
   import Sidebar from '$lib/components/Sidebar.svelte';
+  import BottomNav from '$lib/components/Bottomnav.svelte';
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
   import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
+  import Bottomnav from '$lib/components/BottomNav.svelte';
 
   let conversations = [], currentUser, notifications = [];
 
@@ -36,13 +38,16 @@
   }
 </script>
 
-<div class="min-h-screen flex bg-background">
-  <Sidebar />
+<div class = "h-screen flex bg-background overflow-hidden">
+  <div class = "hidden md:block md:w-64 border-r border-border flex-shrink-0 overflow-y-auto">
+    <Sidebar />
+  </div>
 
-  <main class="flex-1 border-l border-border flex flex-col">
+  <main class="flex-1 border-l border-border flex flex-col overflow-y-auto">
     <h2 class="p-4 font-semibold text-lg">Messages</h2>
 
-    {#each conversations as convo}
+<div class = "pb-20 md:pb-0">
+      {#each conversations as convo}
       {@const other = getOtherUser(convo)}
       <button class="w-full flex items-center justify-between p-4 hover:bg-muted" on:click={() => openConversation(convo)}>
         <div class="flex items-center gap-3">
@@ -57,5 +62,8 @@
         {/if}
       </button>
     {/each}
+</div>
   </main>
 </div>
+
+<BottomNav/>

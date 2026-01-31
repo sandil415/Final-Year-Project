@@ -1,6 +1,7 @@
 <script>
   import Sidebar from "$lib/components/Sidebar.svelte";
   import PostModal from "$lib/components/PostModal.svelte";
+  import BottomNav from "$lib/components/BottomNav.svelte";
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
   import { requireAuth } from '$lib/auth';
@@ -177,14 +178,15 @@
 <div class="h-screen bg-background flex overflow-hidden">
   <!-- CHANGE 3: Wrapped Sidebar in a container with w-64, flex-shrink-0, and overflow-y-auto -->
   <!-- This prevents the sidebar from expanding and makes it independently scrollable -->
-  <div class="w-64 border-r border-border flex-shrink-0 overflow-y-auto">
+  <!-- CHANGE 9: Added md: prefix to show sidebar only on medium screens and larger -->
+  <div class="hidden md:block md:w-64 border-r border-border flex-shrink-0 overflow-y-auto">
     <Sidebar />
   </div>
 
   <!-- MAIN FEED AREA - Only this section scrolls -->
   <!-- CHANGE 4: Main content has overflow-y-auto so only it scrolls -->
   <main class="flex-1 flex justify-center overflow-y-auto">
-    <div class="w-full max-w-[470px] py-8 px-4">
+    <div class="w-full max-w-[470px] py-8 px-4 pb-20 md:pb-8">
       {#if loading}
         <div class="text-center py-20">
           <p class="text-muted-foreground">Loading feed...</p>
@@ -345,7 +347,13 @@
       </p>
     </div>
   </aside>
+
+  <!-- MOBILE BOTTOM NAVIGATION -->
+  <!-- Rendered only on small screens via md:hidden inside BottomNav itself -->
 </div>
+
+<!-- BottomNav: solid opaque bar, only visible below md breakpoint -->
+<BottomNav />
 
 <!-- Post Modal -->
 {#if selectedPostId}
