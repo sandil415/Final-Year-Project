@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import pb from '$lib/pocketbase';
   import { Heart, MessageCircle, X, MoreVertical, Trash2 } from 'lucide-svelte';
+  import { notifyLike, notifyComment } from '$lib/notifications';
 
   export let postId;
   export let onClose;
@@ -104,6 +105,7 @@
 
   async function toggleLike() {
     if (isLiked) {
+      // Unlike
       try {
         await pb.collection('likes').delete(likeRecordId);
         isLiked = false;
@@ -113,28 +115,27 @@
         console.error('Failed to unlike:', err);
       }
     } else {
+      // Like
       try {
         const like = await pb.collection('likes').create({
           post: postId,
           user: currentUser.id
         });
+        
         isLiked = true;
         likeRecordId = like.id;
         likesCount += 1;
 
+        // ✅ Use notification helper (non-blocking)
         if (post.user !== currentUser.id) {
-          try {
-            await pb.collection('notifications').create({
-              user: post.user,
-              triggeredBy: currentUser.id,
-              type: 'like',
-              post: postId,
-              message: `${currentUser.username} liked your post.`,
-              read: false
-            });
-          } catch (notifErr) {
-            console.error('Failed to create notification:', notifErr);
-          }
+          notifyLike(
+            post.user,
+            currentUser.id,
+            currentUser.username,
+            postId
+          ).catch(err => {
+            console.error('Failed to send like notification:', err);
+          });
         }
       } catch (err) {
         console.error('Failed to like:', err);
@@ -161,19 +162,16 @@
       comments = [...comments, expandedComment];
       commentText = '';
 
+      // ✅ Use notification helper (non-blocking)
       if (post.user !== currentUser.id) {
-        try {
-          await pb.collection('notifications').create({
-            user: post.user,
-            triggeredBy: currentUser.id,
-            type: 'comment',
-            post: postId,
-            message: `${currentUser.username} commented on your post.`,
-            read: false
-          });
-        } catch (notifErr) {
-          console.error('Failed to create notification:', notifErr);
-        }
+        notifyComment(
+          post.user,
+          currentUser.id,
+          currentUser.username,
+          postId
+        ).catch(err => {
+          console.error('Failed to send comment notification:', err);
+        });
       }
     } catch (err) {
       console.error('Failed to post comment:', err);

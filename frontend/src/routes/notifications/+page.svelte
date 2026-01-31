@@ -4,13 +4,14 @@
   import { onMount } from 'svelte';
   import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
+  import { Heart, MessageCircle, UserPlus, Bell } from 'lucide-svelte';
 
   let notifications = [];
   let loading = true;
   let currentUser = null;
+  let filter = 'all'; // 'all', 'unread', 'likes', 'comments', 'follows', 'messages'
 
   onMount(async () => {
-    // Ensure user is authenticated
     requireAuth();
     currentUser = pb.authStore.model;
     
@@ -20,42 +21,111 @@
     }
 
     await loadNotifications();
-    
-    // Mark notifications as read after viewing
-    setTimeout(() => {
-      markAllAsRead();
-    }, 1000);
   });
 
   async function loadNotifications() {
     try {
-      // Fetch notifications for current user, sorted by newest first
+      loading = true;
+      
+      let filterQuery = `user = "${currentUser.id}"`;
+      
+      // Apply filters
+      if (filter === 'unread') {
+        filterQuery += ' && read = false';
+      } else if (filter !== 'all') {
+        filterQuery += ` && type = "${filter}"`;
+      }
+
       const records = await pb.collection('notifications').getList(1, 50, {
-        filter: `user = "${currentUser.id}"`,
+        filter: filterQuery,
         sort: '-created',
-        expand: 'triggeredBy' // Expand to get user who triggered the notification
+        expand: 'triggeredBy,post'
       });
 
       notifications = records.items;
-      loading = false;
     } catch (err) {
       console.error('Failed to load notifications:', err);
+    } finally {
       loading = false;
+    }
+  }
+
+  async function markAsRead(notificationId) {
+    try {
+      await pb.collection('notifications').update(notificationId, {
+        read: true
+      });
+      
+      // Update local state
+      notifications = notifications.map(n => 
+        n.id === notificationId ? { ...n, read: true } : n
+      );
+    } catch (err) {
+      console.error('Failed to mark as read:', err);
     }
   }
 
   async function markAllAsRead() {
     try {
-      // Mark all unread notifications as read
       const unreadNotifications = notifications.filter(n => !n.read);
       
-      for (const notification of unreadNotifications) {
-        await pb.collection('notifications').update(notification.id, {
-          read: true
-        });
-      }
+      await Promise.all(
+        unreadNotifications.map(n => 
+          pb.collection('notifications').update(n.id, { read: true })
+        )
+      );
+      
+      // Update local state
+      notifications = notifications.map(n => ({ ...n, read: true }));
     } catch (err) {
-      console.error('Failed to mark notifications as read:', err);
+      console.error('Failed to mark all as read:', err);
+    }
+  }
+
+  function handleNotificationClick(notification) {
+    // Mark as read
+    if (!notification.read) {
+      markAsRead(notification.id);
+    }
+
+    // Navigate based on type
+    if (notification.type === 'follow' && notification.expand?.triggeredBy) {
+      goto(`/profile/${notification.expand.triggeredBy.username}`);
+    } else if (notification.type === 'like' || notification.type === 'comment') {
+      // Could open post modal or go to profile
+      goto(`/profile/${notification.expand?.triggeredBy?.username}`);
+    } else if (notification.type === 'message' && notification.relatedConversation) {
+      goto(`/messages/${notification.relatedConversation}`);
+    }
+  }
+
+  function getNotificationIcon(type) {
+    switch (type) {
+      case 'like':
+        return Heart;
+      case 'comment':
+        return MessageCircle;
+      case 'follow':
+        return UserPlus;
+      case 'message':
+        return MessageCircle;
+      default:
+        return Bell;
+    }
+  }
+
+  function getNotificationColor(type) {
+    switch (type) {
+      case 'like':
+        return 'text-red-500 bg-red-500/10';
+      case 'comment':
+        return 'text-blue-500 bg-blue-500/10';
+      case 'follow':
+        return 'text-green-500 bg-green-500/10';
+      case 'message':
+        return 'text-purple-500 bg-purple-500/10';
+      default:
+        return 'text-muted-foreground bg-muted';
     }
   }
 
@@ -64,13 +134,13 @@
     
     switch (notification.type) {
       case 'follow':
-        return `${username} started following you`;
+        return `started following you`;
       case 'like':
-        return `${username} liked your post`;
+        return `liked your post`;
       case 'comment':
-        return `${username} commented on your post`;
-      case 'mention':
-        return `${username} mentioned you`;
+        return `commented on your post`;
+      case 'message':
+        return notification.message?.replace(`${username} sent you a message: `, '') || 'sent you a message';
       default:
         return notification.message || 'New notification';
     }
@@ -82,171 +152,167 @@
     const seconds = Math.floor((now - date) / 1000);
     
     if (seconds < 60) return 'just now';
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
-    return `${Math.floor(seconds / 604800)}w ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`;
+    return `${Math.floor(seconds / 604800)}w`;
   }
 
-  function handleNotificationClick(notification) {
-    // Navigate based on notification type
-    if (notification.type === 'follow' && notification.expand?.triggeredBy) {
-      goto(`/profile/${notification.expand.triggeredBy.username}`);
-    } else if (notification.relatedPost) {
-      goto(`/post/${notification.relatedPost}`);
-    }
+  async function changeFilter(newFilter) {
+    filter = newFilter;
+    await loadNotifications();
   }
+
+  $: unreadCount = notifications.filter(n => !n.read).length;
 </script>
 
 <div class="h-screen flex bg-background text-foreground overflow-hidden">
   <Sidebar />
 
   <main class="flex-1 overflow-y-auto">
-    <div class="max-w-2xl mx-auto border-x min-h-screen">
+    <div class="max-w-3xl mx-auto border-x min-h-screen">
       <!-- Header -->
-      <div class="sticky top-0 bg-background/95 backdrop-blur border-b z-10 px-6 py-4">
-        <h1 class="text-xl font-semibold">Notifications</h1>
+      <div class="sticky top-0 bg-background/95 backdrop-blur-sm border-b z-10">
+        <div class="px-6 py-4 flex items-center justify-between">
+          <h1 class="text-2xl font-bold">Notifications</h1>
+          
+          {#if unreadCount > 0}
+            <button 
+              on:click={markAllAsRead}
+              class="text-sm text-primary font-medium hover:underline"
+            >
+              Mark all as read
+            </button>
+          {/if}
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="px-6 pb-3 flex gap-2 overflow-x-auto">
+          <button
+            on:click={() => changeFilter('all')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            All
+          </button>
+          <button
+            on:click={() => changeFilter('unread')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'unread' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            Unread {unreadCount > 0 ? `(${unreadCount})` : ''}
+          </button>
+          <button
+            on:click={() => changeFilter('like')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'like' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            Likes
+          </button>
+          <button
+            on:click={() => changeFilter('comment')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'comment' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            Comments
+          </button>
+          <button
+            on:click={() => changeFilter('follow')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'follow' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            Follows
+          </button>
+          <button
+            on:click={() => changeFilter('message')}
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-colors {filter === 'message' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground hover:bg-muted/80'}"
+          >
+            Messages
+          </button>
+        </div>
       </div>
 
       <!-- Content -->
       {#if loading}
         <div class="p-10 text-center">
+          <div class="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
           <p class="text-muted-foreground">Loading notifications...</p>
         </div>
       {:else if notifications.length === 0}
         <!-- Empty State -->
         <div class="flex flex-col items-center justify-center py-20 px-6 text-center">
-          <div class="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-            <span class="text-3xl">🔔</span>
+          <div class="w-20 h-20 rounded-full bg-muted flex items-center justify-center mb-6">
+            <Bell class="w-10 h-10 text-muted-foreground" />
           </div>
-          <h2 class="text-xl font-semibold mb-2">No notifications yet</h2>
-          <p class="text-muted-foreground">
-            When someone follows you or interacts with your posts, you'll see it here.
+          <h2 class="text-xl font-semibold mb-2">
+            {filter === 'all' ? 'No notifications yet' : `No ${filter} notifications`}
+          </h2>
+          <p class="text-muted-foreground max-w-sm">
+            {filter === 'all' 
+              ? 'When someone follows you or interacts with your posts, you\'ll see it here.' 
+              : `You don't have any ${filter} notifications.`}
           </p>
         </div>
       {:else}
         <!-- Notifications List -->
-        <div class="divide-y">
+        <div class="divide-y divide-border">
           {#each notifications as notification}
+            {@const Icon = getNotificationIcon(notification.type)}
+            
             <button
-              class="w-full px-6 py-4 hover:bg-muted/50 transition-colors text-left flex gap-4 items-start {!notification.read ? 'bg-primary/5' : ''}"
+              class="w-full px-6 py-4 hover:bg-muted/30 transition-colors text-left flex gap-4 items-start relative {!notification.read ? 'bg-muted/20' : ''}"
               on:click={() => handleNotificationClick(notification)}
             >
-              <!-- Avatar -->
-              <img
-                src={notification.expand?.triggeredBy?.avatar
-                  ? pb.files.getUrl(notification.expand.triggeredBy, notification.expand.triggeredBy.avatar)
-                  : '/images/profilePlaceholder.jpg'}
-                alt={notification.expand?.triggeredBy?.username || 'User'}
-                class="w-10 h-10 rounded-full object-cover flex-shrink-0"
-              />
+              <!-- Unread Indicator -->
+              {#if !notification.read}
+                <div class="absolute left-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-primary rounded-full"></div>
+              {/if}
+
+              <!-- Avatar with Icon Badge -->
+              <div class="relative flex-shrink-0">
+                <img
+                  src={notification.expand?.triggeredBy?.avatar
+                    ? pb.files.getUrl(notification.expand.triggeredBy, notification.expand.triggeredBy.avatar)
+                    : '/images/profilePlaceholder.jpg'}
+                  alt={notification.expand?.triggeredBy?.username || 'User'}
+                  class="w-12 h-12 rounded-full object-cover"
+                />
+                <div class="absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center {getNotificationColor(notification.type)} border-2 border-background">
+                  <Icon class="w-3 h-3" strokeWidth={2.5} />
+                </div>
+              </div>
 
               <!-- Content -->
               <div class="flex-1 min-w-0">
                 <p class="text-sm">
-                  {getNotificationMessage(notification)}
+                  <span class="font-semibold text-foreground">
+                    {notification.expand?.triggeredBy?.username || 'Someone'}
+                  </span>
+                  <span class="text-muted-foreground ml-1">
+                    {getNotificationMessage(notification)}
+                  </span>
                 </p>
                 <p class="text-xs text-muted-foreground mt-1">
                   {getTimeAgo(notification.created)}
                 </p>
               </div>
 
-              <!-- Unread indicator -->
-              {#if !notification.read}
-                <div class="w-2 h-2 bg-primary rounded-full flex-shrink-0 mt-2"></div>
+              <!-- Post Thumbnail (for likes/comments) -->
+              {#if (notification.type === 'like' || notification.type === 'comment') && notification.expand?.post?.image}
+                <img
+                  src={pb.files.getUrl(notification.expand.post, notification.expand.post.image)}
+                  alt="Post"
+                  class="w-12 h-12 rounded object-cover flex-shrink-0"
+                />
               {/if}
             </button>
           {/each}
         </div>
+
+        <!-- Load More (if needed) -->
+        {#if notifications.length >= 50}
+          <div class="p-6 text-center">
+            <button class="text-sm text-primary font-medium hover:underline">
+              Load more notifications
+            </button>
+          </div>
+        {/if}
       {/if}
     </div>
   </main>
 </div>
-
-<!-- <script>
-  import Sidebar from '$lib/components/Sidebar.svelte';
-  import pb from '$lib/pocketbase';
-  import { onMount, onDestroy } from 'svelte';
-  import { goto } from '$app/navigation';
-  import { requireAuth } from '$lib/auth';
-
-  let notifications = [];
-  let offline = false;
-  let unsubscribe;
-
-  onMount(async () => {
-    requireAuth();
-    loadNotifications();
-    subscribeToNotifications();
-
-    offline = !navigator.onLine;
-    window.addEventListener('online', () => { offline = false; loadNotifications(); });
-    window.addEventListener('offline', () => { offline = true; });
-  });
-
-  onDestroy(() => {
-    unsubscribe?.();
-    window.removeEventListener('online', handleOnline);
-    window.removeEventListener('offline', handleOffline);
-  });
-
-  async function loadNotifications() {
-    try {
-      const res = await pb.collection('notifications').getList(1, 50, {
-        sort: '-created'
-      });
-      notifications = res.items;
-    } catch (err) { console.warn('Offline or fetch failed'); }
-  }
-
-  async function subscribeToNotifications() {
-    unsubscribe = await pb.collection('notifications').subscribe('*', (e) => {
-      if (e.action === 'create') notifications = [e.record, ...notifications];
-      if (e.action === 'update') notifications = notifications.map(n => n.id === e.record.id ? e.record : n);
-    });
-  }
-
-  async function openNotification(n) {
-    if (!n.read) {
-      await pb.collection('notifications').update(n.id, { read: true });
-    }
-    if (n.type === 'message') goto(`/messages/${n.reference}`);
-  }
-</script>
-
-<div class="min-h-screen bg-background flex">
-  <Sidebar />
-
-  <main class="flex-1 p-8">
-    {#if offline}
-      <div class="bg-muted text-muted-foreground text-sm px-4 py-2 rounded-xl mb-4">
-        No internet connection
-      </div>
-    {/if}
-
-    <h1 class="text-2xl font-semibold mb-6">Notifications</h1>
-
-    {#if notifications.length === 0}
-      <div class="text-muted-foreground text-center py-20">
-        You’re all caught up 🎉
-      </div>
-    {:else}
-      <div class="space-y-3">
-        {#each notifications as n}
-          <div
-            class="p-4 rounded-2xl cursor-pointer flex justify-between items-center hover:bg-muted transition {n.read ? 'opacity-60' : 'bg-muted/50'}"
-            on:click={() => openNotification(n)}
-          >
-            <div>
-              <p class="font-medium">{n.title}</p>
-              <p class="text-sm text-muted-foreground">{n.body}</p>
-            </div>
-            {#if !n.read}
-              <span class="w-2 h-2 bg-primary rounded-full"></span>
-            {/if}
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </main>
-</div> -->

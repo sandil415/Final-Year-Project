@@ -1,42 +1,86 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  /**
+   * -----------------------------
+   * Imports
+   * -----------------------------
+   */
+  import Sidebar from '$lib/components/Sidebar.svelte';
   import pb from '$lib/pocketbase';
-  import { Heart, MessageCircle, UserPlus, Bell, X } from 'lucide-svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
 
-  export let isOpen = false;
-  export let onClose;
+  // Icons
+  import { Heart, MessageCircle, UserPlus, Bell } from 'lucide-svelte';
 
-  let notifications = [];
-  let loading = true;
-  let unreadCount = 0;
-  let currentUser = pb.authStore.model;
-  let unsubscribe = null;
+  /**
+   * -----------------------------
+   * State
+   * -----------------------------
+   */
+  let notifications = [];      // All loaded notifications
+  let loading = true;          // Loading state for UI
+  let currentUser = null;      // Logged-in user model
+  let filter = 'all';          // Active filter tab
+  let unsubscribe = null;      // PocketBase realtime unsubscribe fn
 
+  /**
+   * -----------------------------
+   * Lifecycle
+   * -----------------------------
+   */
   onMount(async () => {
+    // Enforce authentication
+    requireAuth();
+
+    // Get current logged-in user from PocketBase
+    currentUser = pb.authStore.model;
+
+    // Redirect if user is not authenticated
+    if (!currentUser) {
+      goto('/login');
+      return;
+    }
+
+    // Initial fetch
     await loadNotifications();
+
+    // Start realtime subscription
     subscribeToNotifications();
   });
 
   onDestroy(() => {
-    if (unsubscribe) {
-      unsubscribe();
-    }
+    // Clean up PocketBase realtime subscription
+    if (unsubscribe) unsubscribe();
   });
 
+  /**
+   * -----------------------------
+   * Data Fetching
+   * -----------------------------
+   */
   async function loadNotifications() {
-    if (!currentUser) return;
-
     try {
       loading = true;
-      const result = await pb.collection('notifications').getList(1, 50, {
-        filter: `user = "${currentUser.id}"`,
+
+      // Base filter: only notifications for logged-in user
+      let filterQuery = `user = "${currentUser.id}"`;
+
+      // Apply UI filter
+      if (filter === 'unread') {
+        filterQuery += ' && read = false';
+      } else if (filter !== 'all') {
+        filterQuery += ` && type = "${filter}"`;
+      }
+
+      // Fetch notifications with expanded relations
+      const records = await pb.collection('notifications').getList(1, 50, {
+        filter: filterQuery,
         sort: '-created',
         expand: 'triggeredBy,post'
       });
 
-      notifications = result.items;
-      unreadCount = notifications.filter(n => !n.read).length;
+      notifications = records.items;
     } catch (err) {
       console.error('Failed to load notifications:', err);
     } finally {
@@ -44,43 +88,64 @@
     }
   }
 
+  /**
+   * -----------------------------
+   * Realtime Updates (PocketBase)
+   * -----------------------------
+   */
   function subscribeToNotifications() {
-    // Subscribe to realtime updates
-    unsubscribe = pb.collection('notifications').subscribe('*', async (e) => {
-      if (e.action === 'create' && e.record.user === currentUser.id) {
-        // New notification for current user
-        try {
-          const expanded = await pb.collection('notifications').getOne(e.record.id, {
-            expand: 'triggeredBy,post'
-          });
-          notifications = [expanded, ...notifications];
-          unreadCount++;
-        } catch (err) {
-          console.error('Failed to load new notification:', err);
+    try {
+      // Subscribe to ALL notification events
+      unsubscribe = pb.collection('notifications').subscribe('*', async (e) => {
+
+        // Ignore notifications not meant for this user
+        if (e.record.user !== currentUser.id) return;
+
+        // New notification created
+        if (e.action === 'create') {
+          try {
+            // Re-fetch to get expanded relations
+            const expanded = await pb.collection('notifications').getOne(e.record.id, {
+              expand: 'triggeredBy,post'
+            });
+
+            notifications = [expanded, ...notifications];
+          } catch {
+            // Fallback if expand fails
+            notifications = [e.record, ...notifications];
+          }
         }
-      } else if (e.action === 'update' && e.record.user === currentUser.id) {
-        // Notification updated (e.g., marked as read)
-        const index = notifications.findIndex(n => n.id === e.record.id);
-        if (index !== -1) {
-          notifications[index] = { ...notifications[index], ...e.record };
-          notifications = notifications;
-          unreadCount = notifications.filter(n => !n.read).length;
+
+        // Notification updated (e.g., read status)
+        else if (e.action === 'update') {
+          notifications = notifications.map(n =>
+            n.id === e.record.id ? { ...n, ...e.record } : n
+          );
         }
-      } else if (e.action === 'delete') {
-        notifications = notifications.filter(n => n.id !== e.record.id);
-        unreadCount = notifications.filter(n => !n.read).length;
-      }
-    });
+
+        // Notification deleted
+        else if (e.action === 'delete') {
+          notifications = notifications.filter(n => n.id !== e.record.id);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to subscribe to notifications:', err);
+    }
   }
 
-  async function markAsRead(notification) {
-    if (notification.read) return;
-
+  /**
+   * -----------------------------
+   * Actions
+   * -----------------------------
+   */
+  async function markAsRead(notificationId) {
     try {
-      await pb.collection('notifications').update(notification.id, {
-        read: true
-      });
-      // The realtime subscription will update the UI
+      await pb.collection('notifications').update(notificationId, { read: true });
+
+      // Optimistic UI update (realtime will also sync)
+      notifications = notifications.map(n =>
+        n.id === notificationId ? { ...n, read: true } : n
+      );
     } catch (err) {
       console.error('Failed to mark as read:', err);
     }
@@ -88,213 +153,87 @@
 
   async function markAllAsRead() {
     try {
-      const unreadNotifs = notifications.filter(n => !n.read);
+      const unread = notifications.filter(n => !n.read);
+
       await Promise.all(
-        unreadNotifs.map(n => 
+        unread.map(n =>
           pb.collection('notifications').update(n.id, { read: true })
         )
       );
-      // Realtime subscription will update UI
+
+      notifications = notifications.map(n => ({ ...n, read: true }));
     } catch (err) {
       console.error('Failed to mark all as read:', err);
     }
   }
 
   function handleNotificationClick(notification) {
-    markAsRead(notification);
-    
+    // Mark notification as read
+    if (!notification.read) markAsRead(notification.id);
+
     // Navigate based on notification type
     if (notification.type === 'follow') {
       goto(`/profile/${notification.expand?.triggeredBy?.username}`);
-    } else if (notification.type === 'like' || notification.type === 'comment') {
-      // You can navigate to profile or stay on home with modal
+    }
+
+    if (notification.type === 'like' || notification.type === 'comment') {
       goto(`/profile/${notification.expand?.triggeredBy?.username}`);
     }
-    
-    onClose();
+
+    if (notification.type === 'message' && notification.relatedConversation) {
+      goto(`/messages/${notification.relatedConversation}`);
+    }
   }
 
+  /**
+   * -----------------------------
+   * UI Helpers
+   * -----------------------------
+   */
   function getNotificationIcon(type) {
     switch (type) {
-      case 'like':
-        return Heart;
-      case 'comment':
-        return MessageCircle;
-      case 'follow':
-        return UserPlus;
-      default:
-        return Bell;
+      case 'like': return Heart;
+      case 'comment': return MessageCircle;
+      case 'follow': return UserPlus;
+      case 'message': return MessageCircle;
+      default: return Bell;
     }
   }
 
   function getNotificationColor(type) {
     switch (type) {
-      case 'like':
-        return 'text-red-500';
-      case 'comment':
-        return 'text-blue-500';
-      case 'follow':
-        return 'text-green-500';
-      default:
-        return 'text-muted-foreground';
+      case 'like': return 'text-red-500 bg-red-500/10';
+      case 'comment': return 'text-blue-500 bg-blue-500/10';
+      case 'follow': return 'text-green-500 bg-green-500/10';
+      case 'message': return 'text-purple-500 bg-purple-500/10';
+      default: return 'text-muted-foreground bg-muted';
     }
   }
 
-  function formatDate(dateString) {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m`;
-    if (diffHours < 24) return `${diffHours}h`;
-    if (diffDays < 7) return `${diffDays}d`;
-    return date.toLocaleDateString();
-  }
-
-  function handleBackdropClick(e) {
-    if (e.target === e.currentTarget) {
-      onClose();
+  function getNotificationMessage(notification) {
+    switch (notification.type) {
+      case 'follow': return 'started following you';
+      case 'like': return 'liked your post';
+      case 'comment': return 'commented on your post';
+      case 'message': return 'sent you a message';
+      default: return notification.message || 'New notification';
     }
   }
+
+  function getTimeAgo(dateString) {
+    const seconds = Math.floor((Date.now() - new Date(dateString)) / 1000);
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`;
+    return `${Math.floor(seconds / 604800)}w`;
+  }
+
+  async function changeFilter(newFilter) {
+    filter = newFilter;
+    await loadNotifications();
+  }
+
+  // Derived state: unread count
+  $: unreadCount = notifications.filter(n => !n.read).length;
 </script>
-
-{#if isOpen}
-  <!-- Backdrop -->
-  <div
-    class="fixed inset-0 z-40"
-    on:click={handleBackdropClick}
-    role="button"
-    tabindex="-1"
-    aria-label="Close notifications"
-  />
-
-  <!-- Notification Panel -->
-  <div class="fixed right-4 top-16 z-50 w-[400px] max-h-[600px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
-    <!-- Header -->
-    <div class="p-4 border-b border-border flex items-center justify-between bg-card sticky top-0 z-10">
-      <h2 class="text-lg font-semibold text-foreground">Notifications</h2>
-      <div class="flex items-center gap-2">
-        {#if unreadCount > 0}
-          <button
-            on:click={markAllAsRead}
-            class="text-xs text-primary hover:underline font-medium"
-          >
-            Mark all read
-          </button>
-        {/if}
-        <button
-          on:click={onClose}
-          class="hover:bg-muted rounded-full p-1 transition-colors"
-          aria-label="Close"
-        >
-          <X class="w-5 h-5 text-foreground" />
-        </button>
-      </div>
-    </div>
-
-    <!-- Notifications List -->
-    <div class="overflow-y-auto max-h-[540px]">
-      {#if loading}
-        <div class="p-8 text-center">
-          <p class="text-muted-foreground text-sm">Loading notifications...</p>
-        </div>
-      {:else if notifications.length === 0}
-        <div class="p-8 text-center">
-          <Bell class="w-12 h-12 mx-auto mb-3 text-muted-foreground opacity-50" />
-          <p class="text-muted-foreground text-sm">No notifications yet</p>
-        </div>
-      {:else}
-        {#each notifications as notification}
-          <button
-            on:click={() => handleNotificationClick(notification)}
-            class="w-full p-4 flex gap-3 hover:bg-muted transition-colors border-b border-border last:border-b-0 {!notification.read ? 'bg-muted/30' : ''}"
-          >
-            <!-- User Avatar -->
-            <img
-              src={notification.expand?.triggeredBy?.avatar
-                ? pb.files.getUrl(notification.expand.triggeredBy, notification.expand.triggeredBy.avatar)
-                : '/images/profilePlaceholder.jpg'}
-              alt={notification.expand?.triggeredBy?.username}
-              class="w-10 h-10 rounded-full object-cover flex-shrink-0"
-            />
-
-            <!-- Content -->
-            <div class="flex-1 min-w-0 text-left">
-              <div class="flex items-start gap-2">
-                <p class="text-sm flex-1">
-                  <span class="font-semibold text-foreground">
-                    {notification.expand?.triggeredBy?.username}
-                  </span>
-                  <span class="text-foreground ml-1">
-                    {#if notification.type === 'like'}
-                      liked your post.
-                    {:else if notification.type === 'comment'}
-                      commented on your post.
-                    {:else if notification.type === 'follow'}
-                      started following you.
-                    {:else}
-                      {notification.message}
-                    {/if}
-                  </span>
-                </p>
-
-                <!-- Icon -->
-                <svelte:component
-                  this={getNotificationIcon(notification.type)}
-                  class="w-4 h-4 flex-shrink-0 {getNotificationColor(notification.type)} {notification.type === 'like' ? 'fill-current' : ''}"
-                />
-              </div>
-
-              <!-- Time + Unread Indicator -->
-              <div class="flex items-center gap-2 mt-1">
-                <span class="text-xs text-muted-foreground">
-                  {formatDate(notification.created)}
-                </span>
-                {#if !notification.read}
-                  <span class="w-2 h-2 rounded-full bg-primary"></span>
-                {/if}
-              </div>
-            </div>
-
-            <!-- Post Thumbnail (for like/comment notifications) -->
-            {#if (notification.type === 'like' || notification.type === 'comment') && notification.expand?.post?.image}
-              <img
-                src={pb.files.getUrl(notification.expand.post, notification.expand.post.image)}
-                alt="Post"
-                class="w-12 h-12 rounded object-cover flex-shrink-0"
-              />
-            {/if}
-          </button>
-        {/each}
-      {/if}
-    </div>
-  </div>
-{/if}
-
-<style>
-  .overflow-y-auto {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(155, 155, 155, 0.3) transparent;
-  }
-
-  .overflow-y-auto::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  .overflow-y-auto::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .overflow-y-auto::-webkit-scrollbar-thumb {
-    background-color: rgba(155, 155, 155, 0.3);
-    border-radius: 3px;
-  }
-
-  .overflow-y-auto::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(155, 155, 155, 0.5);
-  }
-</style>

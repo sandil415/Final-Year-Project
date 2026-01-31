@@ -17,7 +17,7 @@
 
 <aside class="w-64 border-r border-border p-6 flex flex-col">
   <!-- LOGO -->
-  <h1 class="text-2xl font-bold mb-8">FoodSocial</h1>
+  <h1 class="text-2xl font-bold mb-8 pl-3">Fiestra</h1>
 
   <!-- NAV -->
   <nav class="flex-1 space-y-2">

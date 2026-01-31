@@ -5,15 +5,19 @@
   import { page } from '$app/stores';
   import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
+  import { notifyMessage } from '$lib/notifications';
   
   let messages = [], conversation = null, currentUser = null;
   let otherUser = null, loading = true, messageInput = '';
-  let messagesContainer, unsubscribe, fileInput, uploading = false;
+  let messagesContainer, unsubscribe;
 
   onMount(async () => {
     requireAuth();
     currentUser = pb.authStore.model;
     const conversationId = $page.params.conversationId;
+
+    // Mark user as "active" in this conversation
+    await setActiveConversation(conversationId);
 
     await loadConversation(conversationId);
     await loadMessages(conversationId);
@@ -24,10 +28,35 @@
 
   onDestroy(async () => {
     unsubscribe?.();
+    // Mark user as no longer active in conversation
+    await clearActiveConversation();
   });
 
+  // Track which conversation user is viewing
+  async function setActiveConversation(conversationId) {
+    try {
+      await pb.collection('users').update(currentUser.id, { 
+        activeConversation: conversationId 
+      });
+    } catch (err) {
+      console.error('Failed to set active conversation:', err);
+    }
+  }
+
+  async function clearActiveConversation() {
+    try {
+      await pb.collection('users').update(currentUser.id, { 
+        activeConversation: null 
+      });
+    } catch (err) {
+      console.error('Failed to clear active conversation:', err);
+    }
+  }
+
   async function loadConversation(convoId) {
-    conversation = await pb.collection('conversations').getOne(convoId, { expand: 'participants' });
+    conversation = await pb.collection('conversations').getOne(convoId, { 
+      expand: 'participants' 
+    });
     otherUser = conversation.expand.participants.find(p => p.id !== currentUser.id);
     loading = false;
   }
@@ -73,36 +102,21 @@
         lastMessageTime: new Date().toISOString()
       });
 
-      // 3. ✅ NEW: Create notification for the other user
-      await createMessageNotification(content);
+      // 3. ✅ Create smart notification using helper function
+      notifyMessage(
+        otherUser.id,
+        currentUser.id,
+        currentUser.username,
+        content,
+        conversation.id
+      ).catch(err => {
+        console.error('Notification failed (non-critical):', err);
+      });
 
       scrollToBottom();
     } catch (err) {
       console.error('Failed to send message:', err);
       alert('Failed to send message. Please try again.');
-    }
-  }
-
-  // ✅ NEW: Function to create message notification
-  async function createMessageNotification(messageContent) {
-    try {
-      // Don't notify yourself
-      if (!otherUser || otherUser.id === currentUser.id) return;
-
-      // Create notification for the other user
-      await pb.collection('notifications').create({
-        user: otherUser.id,
-        triggeredBy: currentUser.id,
-        type: 'message',
-        message: `${currentUser.username} sent you a message: "${messageContent.slice(0, 50)}${messageContent.length > 50 ? '...' : ''}"`,
-        read: false,
-        relatedConversation: conversation.id  // Link to conversation
-      });
-
-      console.log('Message notification created for:', otherUser.username);
-    } catch (err) {
-      console.error('Failed to create message notification:', err);
-      // Don't throw - notification failure shouldn't break messaging
     }
   }
 
@@ -124,7 +138,13 @@
   <main class="flex-1 flex flex-col">
     <!-- Chat Header -->
     {#if otherUser}
-      <div class="border-b border-border p-4 flex items-center gap-3">
+      <div class="border-b border-border p-4 flex items-center gap-3 bg-background">
+        <button 
+          on:click={() => goto('/messages')}
+          class="lg:hidden p-2 hover:bg-muted rounded-full"
+        >
+          ← 
+        </button>
         <img
           src={otherUser.avatar
             ? pb.files.getUrl(otherUser, otherUser.avatar)
@@ -132,7 +152,7 @@
           alt={otherUser.username}
           class="w-10 h-10 rounded-full object-cover"
         />
-        <div>
+        <div class="flex-1">
           <h2 class="font-semibold text-foreground">{otherUser.username}</h2>
           <p class="text-xs text-muted-foreground">Active now</p>
         </div>
@@ -142,11 +162,11 @@
     <!-- Messages -->
     <div class="flex-1 overflow-y-auto p-4 space-y-4" bind:this={messagesContainer}>
       {#each messages as m}
-        <div class="{m.sender === currentUser.id ? 'text-right' : 'text-left'}">
-          <div class="inline-block max-w-[70%]">
+        <div class="{m.sender === currentUser.id ? 'flex justify-end' : 'flex justify-start'}">
+          <div class="max-w-[70%]">
             <div class="px-4 py-2 rounded-2xl {m.sender === currentUser.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'}">
               {#if m.type === 'text'} 
-                {m.content} 
+                <p class="text-sm break-words">{m.content}</p>
               {/if}
               {#if m.type === 'image'} 
                 <img src={pb.files.getUrl(m, m.media)} class="max-w-xs rounded-lg" alt="Image"/> 
@@ -155,7 +175,7 @@
                 <video src={pb.files.getUrl(m, m.media)} controls class="max-w-xs rounded-lg"/> 
               {/if}
             </div>
-            <div class="text-xs text-muted-foreground mt-1 px-2">
+            <div class="text-xs text-muted-foreground mt-1 px-2 {m.sender === currentUser.id ? 'text-right' : 'text-left'}">
               {new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </div>
           </div>
@@ -164,18 +184,18 @@
     </div>
 
     <!-- Input -->
-    <div class="p-4 flex gap-2 border-t border-border">
+    <div class="p-4 flex gap-2 border-t border-border bg-background">
       <input 
         type="text" 
         bind:value={messageInput} 
         on:keypress={handleKeyPress}
         placeholder="Message..." 
-        class="flex-1 px-4 py-2 rounded-full bg-muted outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+        class="flex-1 px-4 py-2.5 rounded-full bg-muted outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
       />
       <button 
         on:click={sendMessage} 
         disabled={!messageInput.trim()}
-        class="px-6 py-2 bg-primary text-primary-foreground rounded-full font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+        class="px-6 py-2.5 bg-primary text-primary-foreground rounded-full font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
       >
         Send
       </button>
