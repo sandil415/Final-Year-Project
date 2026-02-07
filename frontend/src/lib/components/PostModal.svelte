@@ -126,7 +126,7 @@
         likeRecordId = like.id;
         likesCount += 1;
 
-        // ✅ Use notification helper (non-blocking)
+        // Use notification helper (non-blocking)
         if (post.user !== currentUser.id) {
           notifyLike(
             post.user,

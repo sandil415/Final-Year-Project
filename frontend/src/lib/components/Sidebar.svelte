@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import pb from '$lib/pocketbase';
-  // CHANGE 1: Import Lucide Svelte icons for navigation
+  import { onMount } from 'svelte';
   import { 
     Home, 
     Search, 
@@ -12,6 +12,20 @@
     LogOut 
   } from 'lucide-svelte';
 
+  // FIX: Initialize user as null and load it in onMount
+  let user = null;
+  let mounted = false;
+
+  onMount(() => {
+    mounted = true;
+    user = pb.authStore.model;
+  });
+
+  // Listen for auth changes
+  pb.authStore.onChange(() => {
+    user = pb.authStore.model;
+  });
+
   function isActive(path) {
     return $page.url.pathname === path;
   }
@@ -20,10 +34,9 @@
     pb.authStore.clear();
     goto('/auth/login');
   }
-
-  const user = pb.authStore.model;
 </script>
 
+{#if mounted}
 <aside class="w-64 border-r border-border p-6 flex flex-col">
   <!-- LOGO -->
   <h1 class="text-2xl font-bold mb-8 pl-3">Fiestra</h1>
@@ -31,7 +44,6 @@
   <!-- NAV -->
   <nav class="flex-1 space-y-2">
     <!-- Home Button -->
-    <!-- CHANGE 2: Added Home icon before text -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive('/home') ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto('/home')}
@@ -41,7 +53,6 @@
     </button>
 
     <!-- Search Button -->
-    <!-- CHANGE 3: Added Search icon before text -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive('/search') ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto('/search')}
@@ -51,7 +62,6 @@
     </button>
 
     <!-- Messages Button -->
-    <!-- CHANGE 4: Added MessageCircle icon before text -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive('/messages') ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto('/messages')}
@@ -61,7 +71,6 @@
     </button>
 
     <!-- Notifications Button -->
-    <!-- CHANGE 5: Added Bell icon before text -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive('/notifications') ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto('/notifications')}
@@ -71,7 +80,6 @@
     </button>
 
     <!-- Create Button -->
-    <!-- CHANGE 6: Added PlusSquare icon before text -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive('/create') ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto('/create')}
@@ -81,24 +89,28 @@
     </button>
 
     <!-- Profile Button -->
-    <!-- CHANGE 7: Profile already has avatar image, kept as is -->
     <button
       class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left transition-colors {isActive(`/profile/${user?.username}`) ? 'bg-muted font-semibold' : ''}"
       on:click={() => goto(`/profile/${user?.username}`)}
     >
-      <img
-        src={user?.avatar
-          ? pb.files.getUrl(user, user.avatar)
-          : '/images/profilePlaceholder.jpg'}
-        alt="Profile"
-        class="w-6 h-6 rounded-full object-cover"
-      />
+      {#if user?.avatar}
+        <img
+          src={pb.files.getURL(user, user.avatar)}
+          alt="Profile"
+          class="w-6 h-6 rounded-full object-cover"
+        />
+      {:else}
+        <img
+          src="/images/profilePlaceholder.jpg"
+          alt="Profile"
+          class="w-6 h-6 rounded-full object-cover"
+        />
+      {/if}
       <span>Profile</span>
     </button>
   </nav>
 
   <!-- LOGOUT -->
-  <!-- CHANGE 8: Added LogOut icon before text -->
   <button
     class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-muted text-left mt-auto transition-colors"
     on:click={logout}
@@ -107,3 +119,4 @@
     <span>Logout</span>
   </button>
 </aside>
+{/if}

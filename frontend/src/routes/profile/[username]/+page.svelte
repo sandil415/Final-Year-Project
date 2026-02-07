@@ -1,6 +1,7 @@
 <script>
   import Sidebar from '$lib/components/Sidebar.svelte';
   import PostModal from '$lib/components/PostModal.svelte';
+  import HighlightsSection from '$lib/components/HighlightsSection.svelte';
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
@@ -20,7 +21,7 @@
   let postsCount = 0;
   let loadingPosts = true;
   let selectedPostId = null;
-  let postStats = {}; // Store likes and comments count for each post
+  let postStats = {};
 
   // Stats
   let followersCount = 0;
@@ -104,7 +105,6 @@
       posts = result.items;
       postsCount = result.totalItems;
       
-      // Load stats for each post
       await loadPostsStats();
       
       console.log('Loaded posts:', posts);
@@ -118,7 +118,6 @@
   }
 
   async function loadPostsStats() {
-    // Load likes and comments count for all posts
     for (const post of posts) {
       try {
         const [likesResult, commentsResult] = await Promise.all([
@@ -139,7 +138,6 @@
         postStats[post.id] = { likes: 0, comments: 0 };
       }
     }
-    // Force reactivity
     postStats = postStats;
   }
 
@@ -242,11 +240,10 @@
 
   function closePost() {
     selectedPostId = null;
-    loadPosts(); // Reload posts to update like/comment counts
+    loadPosts();
   }
 
   function handlePostDeleted(deletedPostId) {
-    // Remove the deleted post from the local state
     posts = posts.filter(p => p.id !== deletedPostId);
     postsCount = Math.max(0, postsCount - 1);
     delete postStats[deletedPostId];
@@ -267,7 +264,7 @@
         <div class="flex gap-10 items-center">
           <img
             src={user.avatar
-              ? pb.files.getUrl(user, user.avatar)
+              ? pb.files.getURL(user, user.avatar)
               : '/images/profilePlaceholder.jpg'}
             alt={user.username}
             class="w-24 h-24 rounded-full object-cover"
@@ -318,8 +315,13 @@
           </div>
         </div>
 
+        <!-- HIGHLIGHTS SECTION -->
+        <div class="mt-8 border-t border-border">
+          <HighlightsSection userId={user.id} isOwnProfile={isOwnProfile} />
+        </div>
+
         <!-- DIVIDER -->
-        <div class="border-t border-border mt-10 mb-6"></div>
+        <div class="border-t border-border mt-4 mb-6"></div>
 
         <!-- POSTS SECTION -->
         {#if loadingPosts}
@@ -361,7 +363,7 @@
                 on:click={() => openPost(post.id)}
               >
                 <img
-                  src={pb.files.getUrl(post, post.image)}
+                  src={pb.files.getURL(post, post.image)}
                   alt={post.caption || 'Post'}
                   class="w-full h-full object-cover"
                 />

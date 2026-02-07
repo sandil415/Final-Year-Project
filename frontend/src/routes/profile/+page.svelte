@@ -133,7 +133,7 @@
               href="/profile/edit"
               class="border border-border text-foreground px-4 py-1 rounded-lg text-sm hover:bg-muted transition-colors"
             >
-              Edit profile
+              Edit profile pagr
             </a>
           </div>
 
