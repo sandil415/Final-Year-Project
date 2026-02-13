@@ -4,6 +4,7 @@
   import { requireAuth } from '$lib/auth';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import { goto } from '$app/navigation';
+	import Header from '$lib/components/Header.svelte';
 
   let query = '';
   let results = [];
@@ -45,9 +46,9 @@
   }
 </script>
 
-<div class="min-h-screen flex bg-background text-foreground">
+<div class="min-h-screen flex flex-col bg-background text-foreground">
   <!-- SIDEBAR -->
-  <Sidebar />
+  <Header />
 
   <!-- MAIN -->
   <main class="flex-1 p-10">

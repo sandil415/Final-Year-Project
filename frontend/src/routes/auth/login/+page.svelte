@@ -10,7 +10,7 @@
     error = '';
     try {
       await pb.collection('users').authWithPassword(email, password);
-      goto('/home');
+      goto('/demo');
     } catch (err) {
       if (err instanceof Error) {
         error = err.message;

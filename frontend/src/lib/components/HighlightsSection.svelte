@@ -10,25 +10,21 @@
   export let isOwnProfile = false;
 
   let highlights = [];
-  let loading = true;
+  let loading = false;
   let showCreateModal = false;
   let selectedHighlight = null;
   let showViewModal = false;
   let showEditModal = false;
   let mounted = false;
+  let currentUserId = null;
 
-  // CRITICAL: Use onMount instead of reactive statement
   onMount(() => {
     mounted = true;
     if (userId) {
+      currentUserId = userId;
       loadHighlights();
     }
   });
-
-  // Also watch for userId changes after mount
-  $: if (mounted && userId) {
-    loadHighlights();
-  }
 
   async function loadHighlights() {
     try {
@@ -47,6 +43,7 @@
       console.log('Loaded highlights:', highlights);
     } catch (err) {
       console.error('Failed to load highlights:', err);
+      highlights = [];
     } finally {
       loading = false;
     }
@@ -85,7 +82,9 @@
 
       await pb.collection('highlights').delete(highlight.id);
       
-      await loadHighlights();
+      // Update local state immediately without reload
+      highlights = highlights.filter(h => h.id !== highlight.id);
+      
     } catch (err) {
       console.error('Failed to delete highlight:', err);
       alert('Failed to delete highlight');
@@ -93,21 +92,30 @@
   }
 
   function handleModalClose() {
+    const wasCreateModal = showCreateModal;
+    const wasEditModal = showEditModal;
+    
     showCreateModal = false;
     showViewModal = false;
     showEditModal = false;
     selectedHighlight = null;
-    loadHighlights();
+    
+    // Only reload if user created or edited (not just viewed)
+    if (wasCreateModal || wasEditModal) {
+      loadHighlights();
+    }
   }
 </script>
 
-<!-- ALWAYS render the container, even when loading -->
-<div class="py-4">
+<!-- Fixed container with consistent height -->
+<div class="py-4 min-h-[120px]">
   {#if loading}
-    <p class="text-sm text-muted-foreground">Loading highlights...</p>
+    <div class="flex items-center justify-center h-24">
+      <p class="text-sm text-muted-foreground">Loading highlights...</p>
+    </div>
   {:else}
-    <div class="flex gap-4 overflow-x-auto pb-2">
-      <!-- Create New Highlight Button (only for own profile) -->
+    <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+      <!-- Create New Highlight Button -->
       {#if isOwnProfile}
         <button
           on:click={handleCreateClick}
@@ -122,8 +130,8 @@
         </button>
       {/if}
 
-      <!-- Existing Highlights -->
-      {#each highlights as highlight}
+      <!-- Existing Highlights with keyed each block -->
+      {#each highlights as highlight (highlight.id)}
         <div class="relative flex-shrink-0 group">
           <button
             on:click={() => handleHighlightClick(highlight)}
@@ -149,7 +157,7 @@
             </span>
           </button>
 
-          <!-- Edit/Delete buttons for own profile -->
+          <!-- Edit/Delete buttons -->
           {#if isOwnProfile}
             <div class="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
               <button
@@ -186,3 +194,15 @@
 {#if showEditModal && selectedHighlight}
   <EditHighlightModal highlight={selectedHighlight} onClose={handleModalClose} />
 {/if}
+
+<style>
+  /* Hide scrollbar for cleaner look */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+</style>

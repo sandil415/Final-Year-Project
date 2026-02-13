@@ -241,20 +241,43 @@
         </div>
       </div>
 
-      <!-- DANGER ZONE -->
-      <div class="border-t border-red-200 pt-6 mt-10">
-        <h2 class="text-lg font-semibold mb-2 text-red-600">Account Deletion</h2>
-        <p class="text-sm text-muted-foreground mb-4">
-          Once you delete your account, there is no going back. Please be certain.
-        </p>
-        
-        <button 
-          class="text-red-600 text-sm border border-red-600 px-4 py-2 rounded-lg hover:bg-red-600 hover:text-white"
-          on:click={() => showDeleteModal = true}
-        >
-          Delete account
-        </button>
-      </div>
+      <!-- Delete account -->
+      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+  <div class="bg-background border rounded-lg p-6 max-w-md w-full mx-4">
+    <h2 class="text-lg font-semibold mb-4 text-red-600">Delete account</h2>
+    <p class="text-sm mb-4">
+      This action cannot be undone. Please enter your password to confirm account deletion.
+    </p>
+    <div class="mb-4">
+      <label class="block text-sm mb-1">Password</label>
+      <input
+        type="password"
+        class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
+        bind:value={deletePassword}
+        placeholder="Enter your password"
+        autofocus
+        on:keydown={(e) => e.key === 'Enter' && deleteAccount()}
+      />
+    </div>
+    <div class="flex gap-2">
+      <button
+        class="flex-1 border py-2 rounded-lg hover:bg-muted"
+        on:click={() => {
+          showDeleteModal = false;
+          deletePassword = '';
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        class="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700"
+        on:click={deleteAccount}
+      >
+        Delete permanently
+      </button>
+    </div>
+  </div>
+</div>
     </div>
   </main>
 </div>

@@ -26,10 +26,10 @@
 
   function handleMediaFilesChange(e) {
     const files = Array.from(e.target.files);
-    mediaFiles = [...mediaFiles, ...files];
-
-    // Create previews
+    
     files.forEach(file => {
+      mediaFiles = [...mediaFiles, file];
+      
       const reader = new FileReader();
       reader.onload = (e) => {
         mediaPreview = [...mediaPreview, {
@@ -71,22 +71,31 @@
       }
 
       const highlight = await pb.collection('highlights').create(formData);
+      console.log('Highlight created:', highlight.id);
 
       // Upload each media item
       for (let i = 0; i < mediaFiles.length; i++) {
-        const itemFormData = new FormData();
-        itemFormData.append('highlight', highlight.id);
-        itemFormData.append('user', userId);
-        itemFormData.append('media', mediaFiles[i]);
-        itemFormData.append('order', i);
+        try {
+          const itemFormData = new FormData();
+          itemFormData.append('highlight', highlight.id);
+          itemFormData.append('user', userId);
+          itemFormData.append('media', mediaFiles[i]);
+          itemFormData.append('order', i);
 
-        await pb.collection('highlight_items').create(itemFormData);
+          await pb.collection('highlight_items').create(itemFormData);
+          console.log(`Created item ${i + 1}/${mediaFiles.length}`);
+        } catch (err) {
+          console.error(`Failed to upload item ${i + 1}:`, err);
+          // Continue with other items
+        }
       }
 
+      console.log('All items created successfully');
       onClose();
+      
     } catch (err) {
       console.error('Failed to create highlight:', err);
-      alert('Failed to create highlight: ' + err.message);
+      alert('Failed to create highlight: ' + (err.message || 'Unknown error'));
     } finally {
       uploading = false;
     }
@@ -98,7 +107,7 @@
     <!-- Header -->
     <div class="flex items-center justify-between p-4 border-b border-border sticky top-0 bg-background z-10">
       <h2 class="text-lg font-semibold">Create Highlight</h2>
-      <button on:click={onClose} class="p-2 hover:bg-muted rounded-full">
+      <button on:click={onClose} class="p-2 hover:bg-muted rounded-full" disabled={uploading}>
         <X class="w-5 h-5" />
       </button>
     </div>
@@ -108,7 +117,7 @@
       <!-- Title -->
       <div>
         <label class="block text-sm font-medium mb-2">
-          Highlight Title 
+          Highlight Title *
         </label>
         <input
           type="text"
@@ -116,10 +125,11 @@
           placeholder="e.g., Travel, Food, Pets"
           class="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
           maxlength="50"
+          disabled={uploading}
         />
-        <!-- <p class="text-xs text-muted-foreground mt-1">
+        <p class="text-xs text-muted-foreground mt-1">
           {title.length}/50 characters
-        </p> -->
+        </p>
       </div>
 
       <!-- Cover Image -->
@@ -138,18 +148,20 @@
               alt="Cover preview"
               class="w-full h-full object-cover rounded-full"
             />
-            <button
-              on:click={() => {
-                coverImage = null;
-                coverImagePreview = null;
-              }}
-              class="absolute -top-2 -right-2 p-1 bg-destructive text-destructive-foreground rounded-full"
-            >
-              <X class="w-4 h-4" />
-            </button>
+            {#if !uploading}
+              <button
+                on:click={() => {
+                  coverImage = null;
+                  coverImagePreview = null;
+                }}
+                class="absolute -top-2 -right-2 p-1 bg-destructive text-destructive-foreground rounded-full"
+              >
+                <X class="w-4 h-4" />
+              </button>
+            {/if}
           </div>
         {:else}
-          <label class="flex flex-col items-center justify-center w-32 h-32 mx-auto border-2 border-dashed border-border rounded-full cursor-pointer hover:bg-muted">
+          <label class="flex flex-col items-center justify-center w-32 h-32 mx-auto border-2 border-dashed border-border rounded-full cursor-pointer hover:bg-muted {uploading ? 'opacity-50 cursor-not-allowed' : ''}">
             <ImageIcon class="w-8 h-8 text-muted-foreground mb-2" />
             <span class="text-xs text-muted-foreground">Upload</span>
             <input
@@ -157,6 +169,7 @@
               accept="image/*"
               on:change={handleCoverImageChange}
               class="hidden"
+              disabled={uploading}
             />
           </label>
         {/if}
@@ -172,7 +185,7 @@
         </p>
 
         <!-- Upload Button -->
-        <label class="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-muted mb-4">
+        <label class="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-muted mb-4 {uploading ? 'opacity-50 cursor-not-allowed' : ''}">
           <Upload class="w-5 h-5 text-muted-foreground" />
           <span class="text-sm">Choose files</span>
           <input
@@ -181,13 +194,14 @@
             multiple
             on:change={handleMediaFilesChange}
             class="hidden"
+            disabled={uploading}
           />
         </label>
 
         <!-- Preview Grid -->
         {#if mediaPreview.length > 0}
           <div class="grid grid-cols-3 gap-2">
-            {#each mediaPreview as media, index}
+            {#each mediaPreview as media, index (index)}
               <div class="relative aspect-square bg-muted rounded-lg overflow-hidden group">
                 {#if media.type === 'video'}
                   <video
@@ -202,12 +216,14 @@
                     class="w-full h-full object-cover"
                   />
                 {/if}
-                <button
-                  on:click={() => removeMedia(index)}
-                  class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X class="w-4 h-4" />
-                </button>
+                {#if !uploading}
+                  <button
+                    on:click={() => removeMedia(index)}
+                    class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X class="w-4 h-4" />
+                  </button>
+                {/if}
                 <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/60 text-white text-xs rounded">
                   {index + 1}
                 </div>
@@ -231,11 +247,26 @@
         <button
           on:click={handleSubmit}
           disabled={uploading || !title.trim() || mediaFiles.length === 0}
-          class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
-          {uploading ? 'Creating...' : 'Create Highlight'}
+          {#if uploading}
+            <div class="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"></div>
+            <span>Creating...</span>
+          {:else}
+            Create Highlight
+          {/if}
         </button>
       </div>
     </div>
   </div>
 </div>
+
+<style>
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+</style>

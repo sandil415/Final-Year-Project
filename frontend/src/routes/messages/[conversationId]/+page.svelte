@@ -6,6 +6,7 @@
   import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
   import { notifyMessage } from '$lib/notifications';
+  import Header from '$lib/components/Header.svelte';
   
   let messages = [], conversation = null, currentUser = null;
   let otherUser = null, loading = true, messageInput = '';
@@ -87,7 +88,7 @@
     messageInput = '';
 
     try {
-      // 1. Create the message
+      // Create the message
       await pb.collection('messages').create({
         conversation: conversation.id,
         sender: currentUser.id,
@@ -96,13 +97,13 @@
         read: false
       });
 
-      // 2. Update conversation
+      // Update conversation
       await pb.collection('conversations').update(conversation.id, {
         lastMessage: content,
         lastMessageTime: new Date().toISOString()
       });
 
-      // 3. ✅ Create smart notification using helper function
+      // Create notification using helper function
       notifyMessage(
         otherUser.id,
         currentUser.id,
@@ -132,8 +133,8 @@
   }
 </script>
 
-<div class="h-screen flex bg-background">
-  <Sidebar />
+<div class="h-screen flex flex-col bg-background">
+  <Header />
   
   <main class="flex-1 flex flex-col">
     <!-- Chat Header -->

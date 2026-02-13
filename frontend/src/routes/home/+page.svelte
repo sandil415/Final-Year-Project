@@ -343,7 +343,8 @@
         Suggestions for you
       </h3>
       <p class="text-sm text-muted-foreground">
-        Coming soon...
+        
+        
       </p>
     </div>
   </aside>

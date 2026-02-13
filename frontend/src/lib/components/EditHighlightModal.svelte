@@ -20,7 +20,7 @@
     
     // Set cover image preview if exists
     if (highlight.cover_image) {
-      coverImagePreview = pb.files.getUrl(highlight, highlight.cover_image);
+      coverImagePreview = pb.files.getURL(highlight, highlight.cover_image);
     }
   });
 
@@ -41,6 +41,7 @@
       console.log('Loaded existing items:', existingItems);
     } catch (err) {
       console.error('Failed to load items:', err);
+      existingItems = [];
     } finally {
       loading = false;
     }
@@ -60,9 +61,12 @@
 
   function handleNewMediaChange(e) {
     const files = Array.from(e.target.files);
-    newMediaFiles = [...newMediaFiles, ...files];
-
+    
     files.forEach(file => {
+      // Add to files array
+      newMediaFiles = [...newMediaFiles, file];
+      
+      // Create preview
       const reader = new FileReader();
       reader.onload = (e) => {
         newMediaPreview = [...newMediaPreview, {
@@ -87,13 +91,16 @@
 
     try {
       await pb.collection('highlight_items').delete(item.id);
+      
+      // Remove from local state
       existingItems = existingItems.filter(i => i.id !== item.id);
       
-      // Update order
+      // Update order for remaining items
       existingItems = existingItems.map((item, index) => ({
         ...item,
         order: index
       }));
+      
     } catch (err) {
       console.error('Failed to delete item:', err);
       alert('Failed to remove item');
@@ -101,12 +108,17 @@
   }
 
   function getMediaUrl(item) {
-    return pb.files.getUrl(item, item.media);
+    return pb.files.getURL(item, item.media);
   }
 
   function isVideo(media) {
     if (typeof media === 'string') {
-      return media.endsWith('.mp4') || media.endsWith('.mov') || media.endsWith('.webm');
+      const lower = media.toLowerCase();
+      return lower.endsWith('.mp4') || 
+             lower.endsWith('.mov') || 
+             lower.endsWith('.webm') ||
+             lower.endsWith('.avi') ||
+             lower.endsWith('.mkv');
     }
     return false;
   }
@@ -125,7 +137,7 @@
     try {
       uploading = true;
 
-      // Update highlight details
+      // Step 1: Update highlight title and cover image
       const formData = new FormData();
       formData.append('title', title);
       
@@ -134,30 +146,47 @@
       }
 
       await pb.collection('highlights').update(highlight.id, formData);
+      console.log('✅ Highlight updated');
 
-      // Update order of existing items
+      // Step 2: Update order of existing items
       for (const item of existingItems) {
-        await pb.collection('highlight_items').update(item.id, {
-          order: item.order
-        });
+        try {
+          await pb.collection('highlight_items').update(item.id, {
+            order: item.order
+          });
+        } catch (err) {
+          console.error('Failed to update item order:', item.id, err);
+        }
       }
+      console.log('Existing items order updated');
 
-      // Add new items
+      // Step 3: Add new items
       const startOrder = existingItems.length;
       for (let i = 0; i < newMediaFiles.length; i++) {
-        const itemFormData = new FormData();
-        itemFormData.append('highlight', highlight.id);
-        itemFormData.append('user', highlight.user);
-        itemFormData.append('media', newMediaFiles[i]);
-        itemFormData.append('order', startOrder + i);
+        try {
+          const itemFormData = new FormData();
+          itemFormData.append('highlight', highlight.id);
+          itemFormData.append('user', highlight.user);
+          itemFormData.append('media', newMediaFiles[i]);
+          itemFormData.append('order', startOrder + i);
 
-        await pb.collection('highlight_items').create(itemFormData);
+          await pb.collection('highlight_items').create(itemFormData);
+          console.log(`Created new item ${i + 1}/${newMediaFiles.length}`);
+        } catch (err) {
+          console.error('Failed to create new item:', err);
+          alert(`Failed to upload item ${i + 1}: ${err.message}`);
+          // Continue with other items
+        }
       }
 
+      console.log('✅ All updates complete');
+      
+      // Close modal and trigger refresh
       onClose();
+      
     } catch (err) {
       console.error('Failed to update highlight:', err);
-      alert('Failed to update highlight: ' + err.message);
+      alert('Failed to update highlight: ' + (err.message || 'Unknown error'));
     } finally {
       uploading = false;
     }
@@ -169,7 +198,7 @@
     <!-- Header -->
     <div class="flex items-center justify-between p-4 border-b border-border sticky top-0 bg-background z-10">
       <h2 class="text-lg font-semibold">Edit Highlight</h2>
-      <button on:click={onClose} class="p-2 hover:bg-muted rounded-full">
+      <button on:click={onClose} class="p-2 hover:bg-muted rounded-full" disabled={uploading}>
         <X class="w-5 h-5" />
       </button>
     </div>
@@ -187,6 +216,7 @@
           placeholder="e.g., Travel, Food, Pets"
           class="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
           maxlength="50"
+          disabled={uploading}
         />
         <p class="text-xs text-muted-foreground mt-1">
           {title.length}/50 characters
@@ -206,18 +236,20 @@
               alt="Cover preview"
               class="w-full h-full object-cover rounded-full"
             />
-            <button
-              on:click={() => {
-                coverImage = null;
-                coverImagePreview = null;
-              }}
-              class="absolute -top-2 -right-2 p-1 bg-destructive text-destructive-foreground rounded-full"
-            >
-              <X class="w-4 h-4" />
-            </button>
+            {#if !uploading}
+              <button
+                on:click={() => {
+                  coverImage = null;
+                  coverImagePreview = null;
+                }}
+                class="absolute -top-2 -right-2 p-1 bg-destructive text-destructive-foreground rounded-full"
+              >
+                <X class="w-4 h-4" />
+              </button>
+            {/if}
           </div>
         {:else}
-          <label class="flex flex-col items-center justify-center w-32 h-32 mx-auto border-2 border-dashed border-border rounded-full cursor-pointer hover:bg-muted">
+          <label class="flex flex-col items-center justify-center w-32 h-32 mx-auto border-2 border-dashed border-border rounded-full cursor-pointer hover:bg-muted {uploading ? 'opacity-50 cursor-not-allowed' : ''}">
             <ImageIcon class="w-8 h-8 text-muted-foreground mb-2" />
             <span class="text-xs text-muted-foreground">Upload</span>
             <input
@@ -225,6 +257,7 @@
               accept="image/*"
               on:change={handleCoverImageChange}
               class="hidden"
+              disabled={uploading}
             />
           </label>
         {/if}
@@ -241,7 +274,7 @@
             Current Items ({existingItems.length})
           </label>
           <div class="grid grid-cols-3 gap-2">
-            {#each existingItems as item, index}
+            {#each existingItems as item, index (item.id)}
               <div class="relative aspect-square bg-muted rounded-lg overflow-hidden group">
                 {#if isVideo(item.media)}
                   <video
@@ -256,12 +289,14 @@
                     class="w-full h-full object-cover"
                   />
                 {/if}
-                <button
-                  on:click={() => removeExistingItem(item)}
-                  class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 class="w-4 h-4" />
-                </button>
+                {#if !uploading}
+                  <button
+                    on:click={() => removeExistingItem(item)}
+                    class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 class="w-4 h-4" />
+                  </button>
+                {/if}
                 <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/60 text-white text-xs rounded">
                   {index + 1}
                 </div>
@@ -277,7 +312,7 @@
           Add New Items
         </label>
 
-        <label class="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-muted mb-4">
+        <label class="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-muted mb-4 {uploading ? 'opacity-50 cursor-not-allowed' : ''}">
           <Upload class="w-5 h-5 text-muted-foreground" />
           <span class="text-sm">Choose files</span>
           <input
@@ -286,12 +321,13 @@
             multiple
             on:change={handleNewMediaChange}
             class="hidden"
+            disabled={uploading}
           />
         </label>
 
         {#if newMediaPreview.length > 0}
           <div class="grid grid-cols-3 gap-2">
-            {#each newMediaPreview as media, index}
+            {#each newMediaPreview as media, index (index)}
               <div class="relative aspect-square bg-muted rounded-lg overflow-hidden group">
                 {#if media.type === 'video'}
                   <video
@@ -306,12 +342,14 @@
                     class="w-full h-full object-cover"
                   />
                 {/if}
-                <button
-                  on:click={() => removeNewMedia(index)}
-                  class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <X class="w-4 h-4" />
-                </button>
+                {#if !uploading}
+                  <button
+                    on:click={() => removeNewMedia(index)}
+                    class="absolute top-2 right-2 p-1 bg-destructive text-destructive-foreground rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X class="w-4 h-4" />
+                  </button>
+                {/if}
                 <div class="absolute bottom-2 left-2 px-2 py-1 bg-primary text-primary-foreground text-xs rounded">
                   New
                 </div>
@@ -335,11 +373,26 @@
         <button
           on:click={handleSubmit}
           disabled={uploading || !title.trim() || (existingItems.length === 0 && newMediaFiles.length === 0)}
-          class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
-          {uploading ? 'Saving...' : 'Save Changes'}
+          {#if uploading}
+            <div class="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"></div>
+            <span>Saving...</span>
+          {:else}
+            Save Changes
+          {/if}
         </button>
       </div>
     </div>
   </div>
 </div>
+
+<style>
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+</style>
