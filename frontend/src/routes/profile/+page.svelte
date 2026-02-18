@@ -6,6 +6,7 @@
   import PostModal from '$lib/components/PostModal.svelte';
   import { goto } from '$app/navigation';
   import { Camera, Heart, MessageCircle } from 'lucide-svelte';
+	import Header from '$lib/components/Header.svelte';
 
   let user;
   let posts = [];
@@ -110,8 +111,8 @@
 </script>
 
 {#if user}
-<div class="min-h-screen flex bg-background text-foreground">
-  <Sidebar />
+<div class="min-h-screen flex flex-col bg-background text-foreground">
+  <Header />
 
   <main class="flex-1 p-10 overflow-y-auto">
     <div class="max-w-4xl mx-auto">
@@ -133,7 +134,7 @@
               href="/profile/edit"
               class="border border-border text-foreground px-4 py-1 rounded-lg text-sm hover:bg-muted transition-colors"
             >
-              Edit profile pagr
+              Edit profile page
             </a>
           </div>
 

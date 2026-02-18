@@ -3,6 +3,7 @@
   import L from 'leaflet';
   import 'leaflet/dist/leaflet.css';
   import Header from '$lib/components/Header.svelte';
+	import { goto } from '$app/navigation';
   
   let map;
   let mapContainer;
@@ -97,7 +98,7 @@
           <h1 class="h1">
             AUTHENTIC<br/>
             NEPALI<br/>
-            FOOD
+            CUISINES
           </h1>
           
           <p class="text-content max-w-md text-muted-foreground">
@@ -105,15 +106,15 @@
           </p>
           
           <div class="flex flex-wrap gap-4">
-            <button class="cta-primary px-8 py-4 rounded-full font-bold inline-flex items-center gap-3 transition-all group">
+            <button class="cta-primary px-8 py-4 rounded-full font-bold inline-flex items-center gap-3 transition-all group" on:click={goto('/search')}>
               <span>EXPLORE FOOD</span>
               <svg class="w-5 h-5 group-hover:translate-x-1 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="5" y1="12" x2="19" y2="12"/>
                 <polyline points="12 5 19 12 12 19"/>
               </svg>
             </button>
-            <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all">
-              SELL YOUR DISHES
+            <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all" on:click={goto('/create')}>
+              CREATE YOUR POSTS
             </button>
           </div>
         </div>
@@ -139,7 +140,7 @@
 
   <!-- Trending Now -->
   <section class="max-w-7xl mx-auto px-6 py-16">
-    <h3 class="h3 mb-8">🔥 Trending Now</h3>
+    <h3 class="h3 mb-8">Trending Now</h3>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       {#each trendingNow as item}
         <button class="trending-card bg-background border-2 border-border p-6 rounded-2xl hover:border-orange transition-all hover:shadow-lg group">
@@ -206,21 +207,21 @@
           class:active={activeCategory === 'restaurant'}
           on:click={() => setCategory('restaurant')}
         >
-          🍽️ Restaurants
+          Restaurants
         </button>
         <button 
           class="category-btn px-5 py-2.5 rounded-full font-semibold text-sm transition-all"
           class:active={activeCategory === 'home'}
           on:click={() => setCategory('home')}
         >
-          🏠 Home Kitchens
+          Home Kitchens
         </button>
         <button 
           class="category-btn px-5 py-2.5 rounded-full font-semibold text-sm transition-all"
           class:active={activeCategory === 'street'}
           on:click={() => setCategory('street')}
         >
-          🛒 Street Food
+          Favourites
         </button>
       </div>
     </div>
@@ -249,7 +250,7 @@
   </section>
 
   <!-- App Download CTA -->
-  <section class="max-w-7xl mx-auto px-6 py-16">
+  <!-- <section class="max-w-7xl mx-auto px-6 py-16">
     <div class="app-download-cta relative overflow-hidden rounded-3xl p-12 text-center">
       <div class="relative z-10 space-y-6 max-w-2xl mx-auto">
         <div class="flex items-center justify-center gap-6">
@@ -269,7 +270,7 @@
         </div>
       </div>
     </div>
-  </section>
+  </section> -->
 </div>
 
 <style>

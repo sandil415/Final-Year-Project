@@ -5,6 +5,9 @@
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import { Camera } from 'lucide-svelte';
+  import { CameraIcon, ArrowLeftIcon} from "phosphor-svelte";
+	import Header from '$lib/components/Header.svelte';
+  
 
   let user = null;
   let selectedFile = null;
@@ -155,12 +158,16 @@
   }
 </script>
 
-<div class="h-screen flex bg-background text-foreground overflow-hidden">
-  <Sidebar />
+<div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+  <!-- <Sidebar /> -->
+  <Header></Header>
 
   <main class="flex-1 overflow-y-auto">
     <div class="max-w-4xl mx-auto p-6">
-      <div class="mb-8">
+      <div class="flex mb-8 gap-4">
+        <button on:click={goto('/demo')}>
+        <ArrowLeftIcon/>
+        </button>
         <h1 class="text-2xl font-semibold">Create new post</h1>
       </div>
 
@@ -180,7 +187,7 @@
         >
           <div class="flex flex-col items-center gap-4">
             <div class="w-20 h-20 rounded-full bg-muted flex items-center justify-center">
-              <Camera class="w-10 h-10 text-muted-foreground" />
+              <CameraIcon class="w-10 h-10 text-muted-foreground" />
             </div>
             <div>
               <h2 class="text-xl font-medium mb-2">Drag photos here</h2>

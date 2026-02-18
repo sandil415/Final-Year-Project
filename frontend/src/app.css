@@ -9,6 +9,18 @@
 
 }
 
+@theme {
+  --color-app-primary: hsl(var(--app-primary));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  
+  --color-app-secondary:  hsl(var(--app-secondary));
+  --color-foreground: hsl(var(--foreground));
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -22,6 +34,8 @@
     --muted: 0 0% 96.1%;
     --muted-foreground: 0 0% 45.1%;
     --border: 0 0% 89.8%;
+    --app-primary: 16 100% 60%;
+
   }
 
   @media (prefers-color-scheme: dark) {
@@ -37,6 +51,7 @@
       --muted: 0 0% 14.9%;
       --muted-foreground: 0 0% 63.9%;
       --border: 0 0% 14.9%;
+      --app-primary: 16 100% 60%;
     }
   }
 

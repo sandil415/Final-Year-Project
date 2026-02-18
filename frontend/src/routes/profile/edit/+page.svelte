@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
+	import Header from '$lib/components/Header.svelte';
 
   let user;
   let username = '';
@@ -135,7 +136,7 @@
 </script>
 
 <div class="h-screen flex bg-background text-foreground overflow-hidden">
-  <Sidebar />
+  <Header />
 
   <main class="flex-1 overflow-y-auto">
     <div class="max-w-xl mx-auto p-10">

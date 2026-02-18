@@ -8,6 +8,7 @@
   import { requireAuth } from '$lib/auth';
   import { page } from '$app/stores';
   import { Camera, Heart, MessageCircle } from 'lucide-svelte';
+	import Header from '$lib/components/Header.svelte';
 
   let user = null;
   let loading = true;
@@ -252,7 +253,7 @@
 </script>
 
 <div class="h-screen flex bg-background text-foreground overflow-hidden">
-  <Sidebar />
+  <Header />
 
   <main class="flex-1 overflow-y-auto">
     {#if loading}

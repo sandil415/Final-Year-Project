@@ -5,6 +5,7 @@
   import Sidebar from '$lib/components/Sidebar.svelte';
   import { goto } from '$app/navigation';
 	import Header from '$lib/components/Header.svelte';
+  import { ArrowLeftIcon } from 'lucide-svelte';
 
   let query = '';
   let results = [];
@@ -52,6 +53,9 @@
 
   <!-- MAIN -->
   <main class="flex-1 p-10">
+    <button on:click={()=> goto('/demo')}>
+      <ArrowLeftIcon/>
+    </button>
     <div class="max-w-xl mx-auto">
       <!-- SEARCH INPUT -->
       <input
