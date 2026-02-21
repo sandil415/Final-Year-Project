@@ -1,10 +1,10 @@
 <script>
-  import Sidebar from '$lib/components/Sidebar.svelte';
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
-	import Header from '$lib/components/Header.svelte';
+  import Header from '$lib/components/Header.svelte';
+  import { Store, ChefHat, Truck, UtensilsCrossed } from 'lucide-svelte';
 
   let user;
   let username = '';
@@ -14,30 +14,57 @@
   let canChangeUsername = true;
   let nextUsernameChangeDate = null;
 
-  // Password change fields
+  // Password fields
   let oldPassword = '';
   let newPassword = '';
   let confirmPassword = '';
 
-  // Delete account modal
+  // Delete account
   let showDeleteModal = false;
   let deletePassword = '';
+  let deleteError = '';
+
+  // Business
+  let isBusiness = false;
+  let businessName = '';
+  let businessType = 'home_chef';
+  let businessDescription = '';
+  let businessPhone = '';
+  let businessAddress = '';
+  let showBusinessUpgradeModal = false;
+
+  // Toast
+  let toast = null;
+  function showToast(msg, type = 'success') {
+    toast = { msg, type };
+    setTimeout(() => toast = null, 3000);
+  }
+
+  const businessTypes = [
+    { value: 'home_chef', label: 'Home Chef', icon: ChefHat },
+    { value: 'restaurant', label: 'Restaurant', icon: Store },
+    { value: 'food_truck', label: 'Food Truck', icon: Truck },
+    { value: 'catering', label: 'Catering', icon: UtensilsCrossed },
+  ];
 
   onMount(() => {
     requireAuth();
     user = pb.authStore.model;
     username = user.username;
     bio = user.bio || '';
-    
+    isBusiness = user.accountType === 'business';
+    businessName = user.businessName || '';
+    businessType = user.businessType || 'home_chef';
+    businessDescription = user.businessDescription || '';
+    businessPhone = user.businessPhone || '';
+    businessAddress = user.businessAddress || '';
     checkUsernameChangeEligibility();
   });
 
   function checkUsernameChangeEligibility() {
     if (user.usernameLastChanged) {
       const lastChanged = new Date(user.usernameLastChanged);
-      const now = new Date();
-      const hoursSinceChange = (now - lastChanged) / (1000 * 60 * 60);
-      
+      const hoursSinceChange = (new Date() - lastChanged) / (1000 * 60 * 60);
       if (hoursSinceChange < 24) {
         canChangeUsername = false;
         nextUsernameChangeDate = new Date(lastChanged.getTime() + 24 * 60 * 60 * 1000);
@@ -52,270 +79,220 @@
 
   async function save() {
     const form = new FormData();
-    
-    // Only update username if it changed and user is eligible
     if (username !== user.username) {
       if (!canChangeUsername) {
-        alert(`You can only change your username once every 24 hours. Next change available: ${nextUsernameChangeDate.toLocaleString()}`);
+        showToast(`Next username change: ${nextUsernameChangeDate.toLocaleString()}`, 'error');
         return;
       }
       form.append('username', username);
       form.append('usernameLastChanged', new Date().toISOString());
     }
-    
     form.append('bio', bio);
     if (avatar) form.append('avatar', avatar);
 
     try {
       const updated = await pb.collection('users').update(user.id, form);
       pb.authStore.save(pb.authStore.token, updated);
-      alert('Profile updated successfully!');
+      showToast('Profile updated!');
       goto('/profile');
     } catch (err) {
-      console.error('Failed to update profile:', err);
-      alert(err.message || 'Failed to update profile');
+      showToast(err.message || 'Failed to update profile', 'error');
     }
   }
 
   async function changePassword() {
     if (!oldPassword || !newPassword || !confirmPassword) {
-      alert('Please fill in all password fields');
-      return;
+      showToast('Fill in all password fields', 'error'); return;
     }
-
     if (newPassword !== confirmPassword) {
-      alert('New passwords do not match');
-      return;
+      showToast('New passwords do not match', 'error'); return;
     }
-
     if (newPassword.length < 8) {
-      alert('New password must be at least 8 characters long');
-      return;
+      showToast('Password must be at least 8 characters', 'error'); return;
     }
-
     try {
       await pb.collection('users').update(user.id, {
-        oldPassword: oldPassword,
-        password: newPassword,
-        passwordConfirm: confirmPassword
+        oldPassword, password: newPassword, passwordConfirm: confirmPassword
       });
-
-      alert('Password changed successfully!');
-      oldPassword = '';
-      newPassword = '';
-      confirmPassword = '';
+      showToast('Password changed!');
+      oldPassword = ''; newPassword = ''; confirmPassword = '';
     } catch (err) {
-      console.error('Failed to change password:', err);
-      alert(err.message || 'Failed to change password. Make sure your old password is correct.');
+      showToast(err?.response?.message || 'Wrong current password', 'error');
     }
   }
 
   async function deleteAccount() {
+    deleteError = '';
     if (!deletePassword) {
-      alert('Please enter your password to confirm account deletion');
-      return;
+      deleteError = 'Please enter your password'; return;
     }
-
     try {
-      // Authenticate user with their password
-      await pb.collection('users').authWithPassword(user.email, deletePassword);
-      
-      // If authentication succeeds, delete the account
-      await pb.collection('users').delete(user.id);
-      
-      // Clear auth and redirect
+      await pb.collection('users').authWithPassword(pb.authStore.model.email, deletePassword);
+      await pb.collection('users').delete(pb.authStore.model.id);
       pb.authStore.clear();
-      alert('Your account has been deleted');
       goto('/auth/login');
     } catch (err) {
-      console.error('Failed to delete account:', err);
-      alert('Incorrect password or failed to delete account');
+      deleteError = err?.response?.message || err?.message || 'Incorrect password';
       deletePassword = '';
+    }
+  }
+
+  async function upgradeToBusinessAccount() {
+    if (!businessName.trim()) {
+      showToast('Business name is required', 'error'); return;
+    }
+    try {
+      const updated = await pb.collection('users').update(user.id, {
+        accountType: 'business',
+        businessName: businessName.trim(),
+        businessType,
+        businessDescription,
+        businessPhone,
+        businessAddress,
+      });
+      pb.authStore.save(pb.authStore.token, updated);
+      isBusiness = true;
+      showBusinessUpgradeModal = false;
+      showToast('Business account activated! 🎉');
+    } catch (err) {
+      showToast(err.message || 'Failed to upgrade account', 'error');
+    }
+  }
+
+  async function saveBusinessDetails() {
+    try {
+      const updated = await pb.collection('users').update(user.id, {
+        businessName, businessType, businessDescription, businessPhone, businessAddress
+      });
+      pb.authStore.save(pb.authStore.token, updated);
+      showToast('Business details saved!');
+    } catch (err) {
+      showToast(err.message || 'Failed to save', 'error');
     }
   }
 </script>
 
-<div class="h-screen flex bg-background text-foreground overflow-hidden">
-  <Header />
-
-  <main class="flex-1 overflow-y-auto">
-    <div class="max-w-xl mx-auto p-10">
-      <h1 class="text-xl font-semibold mb-8">Edit profile</h1>
-
-      <div class="space-y-6">
-        <!-- USERNAME -->
-        <div>
-          <label class="block text-sm mb-1">Username</label>
-          <input
-            class="w-full border rounded-lg px-4 py-2 bg-background text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-            bind:value={username}
-            disabled={!canChangeUsername}
-          />
-          {#if !canChangeUsername}
-            <p class="text-xs text-red-500 mt-1">
-              You can change your username again on {nextUsernameChangeDate?.toLocaleString()}
-            </p>
-          {/if}
-        </div>
-
-        <!-- BIO -->
-        <div>
-          <label class="block text-sm mb-1">Bio</label>
-          <textarea
-            rows="3"
-            class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-            bind:value={bio}
-          />
-        </div>
-
-        <!-- AVATAR UPLOAD -->
-        <div>
-          <label class="block text-sm mb-2">Profile picture</label>
-
-          <div class="flex items-center gap-4">
-            <label class="cursor-pointer border px-4 py-2 rounded-lg hover:bg-muted">
-              Choose file
-              <input
-                type="file"
-                accept="image/*"
-                class="hidden"
-                on:change={handleFile}
-              />
-            </label>
-
-            <span class="text-sm text-muted-foreground">
-              {avatarName}
-            </span>
-          </div>
-        </div>
-
-        <!-- SAVE -->
-        <button
-          class="w-full bg-primary text-primary-foreground py-2 rounded-lg hover:opacity-90"
-          on:click={save}
-        >
-          Save changes
-        </button>
-      </div>
-
-      <!-- PASSWORD CHANGE SECTION -->
-      <div class="border-t pt-6 mt-10">
-        <h2 class="text-lg font-semibold mb-4">Change password</h2>
-        
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm mb-1">Current password</label>
-            <input
-              type="password"
-              class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-              bind:value={oldPassword}
-              placeholder="Enter current password"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm mb-1">New password</label>
-            <input
-              type="password"
-              class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-              bind:value={newPassword}
-              placeholder="Enter new password (min 8 characters)"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm mb-1">Confirm new password</label>
-            <input
-              type="password"
-              class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-              bind:value={confirmPassword}
-              placeholder="Re-enter new password"
-            />
-          </div>
-
-          <button
-            class="w-full border border-primary text-primary py-2 rounded-lg hover:bg-primary hover:text-primary-foreground"
-            on:click={changePassword}
-          >
-            Change password
-          </button>
-        </div>
-      </div>
-
-      <!-- Delete account -->
-      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-  <div class="bg-background border rounded-lg p-6 max-w-md w-full mx-4">
-    <h2 class="text-lg font-semibold mb-4 text-red-600">Delete account</h2>
-    <p class="text-sm mb-4">
-      This action cannot be undone. Please enter your password to confirm account deletion.
-    </p>
-    <div class="mb-4">
-      <label class="block text-sm mb-1">Password</label>
-      <input
-        type="password"
-        class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-        bind:value={deletePassword}
-        placeholder="Enter your password"
-        autofocus
-        on:keydown={(e) => e.key === 'Enter' && deleteAccount()}
-      />
-    </div>
-    <div class="flex gap-2">
-      <button
-        class="flex-1 border py-2 rounded-lg hover:bg-muted"
-        on:click={() => {
-          showDeleteModal = false;
-          deletePassword = '';
-        }}
-      >
-        Cancel
-      </button>
-      <button
-        class="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700"
-        on:click={deleteAccount}
-      >
-        Delete permanently
-      </button>
-    </div>
+<!-- Toast -->
+{#if toast}
+  <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-5 py-3 rounded-xl shadow-xl text-sm font-medium text-white transition-all
+    {toast.type === 'error' ? 'bg-red-500' : ''}"
+    style={toast.type !== 'error' ? 'background-color: #FF6B35;' : ''}
+  >
+    {toast.msg}
   </div>
-</div>
-    </div>
-  </main>
-</div>
+{/if}
 
-<!-- DELETE ACCOUNT MODAL -->
-{#if showDeleteModal}
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-    <div class="bg-background border rounded-lg p-6 max-w-md w-full mx-4">
-      <h2 class="text-lg font-semibold mb-4 text-red-600">Delete account</h2>
-      
-      <p class="text-sm mb-4">
-        This action cannot be undone. Please enter your password to confirm account deletion.
-      </p>
-
-      <div class="mb-4">
-        <label class="block text-sm mb-1">Password</label>
-        <input
-          type="password"
-          class="w-full border rounded-lg px-4 py-2 bg-background text-foreground"
-          bind:value={deletePassword}
-          placeholder="Enter your password"
-          autofocus
-        />
+<!-- Business Upgrade Modal -->
+{#if showBusinessUpgradeModal}
+  <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div class="bg-background border border-border rounded-2xl p-6 max-w-lg w-full shadow-2xl">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="w-10 h-10 rounded-full flex items-center justify-center" style="background-color: #FF6B35;">
+          <Store class="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <h2 class="text-lg font-bold text-foreground">Upgrade to Business</h2>
+          <p class="text-xs text-muted-foreground">Reach more customers on FIESTRA</p>
+        </div>
       </div>
 
-      <div class="flex gap-2">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium mb-1">Business name <span class="text-red-500">*</span></label>
+          <input
+            class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground focus:outline-none focus:ring-2"
+            style="--tw-ring-color: #FF6B35;"
+            bind:value={businessName}
+            placeholder="e.g. Momo Palace, Chef Anita's Kitchen"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">Business type</label>
+          <div class="grid grid-cols-2 gap-2">
+            {#each businessTypes as bt}
+              {@const Icon = bt.icon}
+              <button
+                class="flex items-center gap-2 p-3 rounded-xl border-2 transition-all text-sm font-medium text-left
+                  {businessType === bt.value ? 'border-orange-400 text-foreground' : 'border-border text-muted-foreground hover:border-border/60'}"
+                style={businessType === bt.value ? 'background-color: #FF6B3515; border-color: #FF6B35;' : ''}
+                on:click={() => businessType = bt.value}
+              >
+                <Icon class="w-4 h-4 flex-shrink-0" style={businessType === bt.value ? 'color: #FF6B35;' : ''} />
+                {bt.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Description</label>
+          <textarea
+            rows="2"
+            class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground resize-none"
+            bind:value={businessDescription}
+            placeholder="What makes your food special?"
+          />
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium mb-1">Phone</label>
+            <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={businessPhone} placeholder="+977 98..." />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Address</label>
+            <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={businessAddress} placeholder="Thamel, Kathmandu" />
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-2 mt-6">
         <button
-          class="flex-1 border py-2 rounded-lg hover:bg-muted"
-          on:click={() => {
-            showDeleteModal = false;
-            deletePassword = '';
-          }}
+          class="flex-1 border border-border py-2.5 rounded-xl hover:bg-muted transition-colors text-sm font-medium"
+          on:click={() => showBusinessUpgradeModal = false}
         >
           Cancel
         </button>
         <button
-          class="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700"
+          class="flex-1 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+          style="background-color: #FF6B35;"
+          on:click={upgradeToBusinessAccount}
+        >
+          Activate Business Account
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Delete Modal — ONLY ONE, PROPERLY GUARDED -->
+{#if showDeleteModal}
+  <div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div class="bg-background border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl">
+      <h2 class="text-lg font-bold mb-1 text-red-500">Delete account</h2>
+      <p class="text-sm text-muted-foreground mb-4">
+        This is permanent and cannot be undone. Enter your password to confirm.
+      </p>
+      <input
+        type="password"
+        class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground mb-2"
+        bind:value={deletePassword}
+        placeholder="Your password"
+        on:keydown={(e) => e.key === 'Enter' && deleteAccount()}
+      />
+      {#if deleteError}
+        <p class="text-xs text-red-500 mb-3">{deleteError}</p>
+      {/if}
+      <div class="flex gap-2 mt-4">
+        <button
+          class="flex-1 border border-border py-2.5 rounded-xl hover:bg-muted text-sm font-medium"
+          on:click={() => { showDeleteModal = false; deletePassword = ''; deleteError = ''; }}
+        >
+          Cancel
+        </button>
+        <button
+          class="flex-1 bg-red-500 hover:bg-red-600 text-white py-2.5 rounded-xl text-sm font-semibold"
           on:click={deleteAccount}
         >
           Delete permanently
@@ -324,3 +301,183 @@
     </div>
   </div>
 {/if}
+
+<div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+  <Header />
+  <main class="flex-1 overflow-y-auto">
+    <div class="max-w-xl mx-auto p-8 pb-20">
+      <h1 class="text-xl font-bold mb-8">Edit profile</h1>
+
+      <!-- PROFILE SECTION -->
+      <div class="space-y-5">
+        <div>
+          <label class="block text-sm font-medium mb-1">Username</label>
+          <input
+            class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+            bind:value={username}
+            disabled={!canChangeUsername}
+          />
+          {#if !canChangeUsername}
+            <p class="text-xs text-red-500 mt-1">
+              Available again: {nextUsernameChangeDate?.toLocaleString()}
+            </p>
+          {/if}
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Bio</label>
+          <textarea rows="3" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground resize-none" bind:value={bio} />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">Profile picture</label>
+          <div class="flex items-center gap-4">
+            <label class="cursor-pointer border border-border px-4 py-2 rounded-xl hover:bg-muted text-sm font-medium transition-colors">
+              Choose file
+              <input type="file" accept="image/*" class="hidden" on:change={handleFile} />
+            </label>
+            <span class="text-sm text-muted-foreground truncate">{avatarName}</span>
+          </div>
+        </div>
+
+        <button
+          class="w-full text-white py-2.5 rounded-xl font-semibold hover:opacity-90 transition-opacity"
+          style="background-color: #FF6B35;"
+          on:click={save}
+        >
+          Save changes
+        </button>
+      </div>
+
+      <!-- BUSINESS SECTION -->
+      <div class="border-t border-border pt-8 mt-10">
+        {#if !isBusiness}
+          <!-- Upgrade CTA -->
+          <div class="rounded-2xl p-5 border-2 border-dashed border-border hover:border-orange-300 transition-colors">
+            <div class="flex items-start gap-4">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background-color: #FF6B3520;">
+                <Store class="w-6 h-6" style="color: #FF6B35;" />
+              </div>
+              <div class="flex-1">
+                <h3 class="font-bold text-foreground mb-1">Go Business on FIESTRA</h3>
+                <p class="text-sm text-muted-foreground mb-3">
+                  Are you a home chef or restaurant? Accept orders, manage your menu, and grow your food business.
+                </p>
+                <ul class="text-sm text-muted-foreground space-y-1 mb-4">
+                  <li class="flex items-center gap-2"><span style="color: #FF6B35;">✓</span> Receive and manage orders</li>
+                  <li class="flex items-center gap-2"><span style="color: #FF6B35;">✓</span> Create and update your menu</li>
+                  <li class="flex items-center gap-2"><span style="color: #FF6B35;">✓</span> Business profile badge</li>
+                  <li class="flex items-center gap-2"><span style="color: #FF6B35;">✓</span> Dedicated business dashboard</li>
+                </ul>
+                <button
+                  class="px-5 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+                  style="background-color: #FF6B35;"
+                  on:click={() => showBusinessUpgradeModal = true}
+                >
+                  Upgrade to Business →
+                </button>
+              </div>
+            </div>
+          </div>
+        {:else}
+          <!-- Edit Business Details -->
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="text-lg font-bold">Business details</h2>
+            <button
+              class="text-sm font-semibold px-4 py-1.5 rounded-xl text-white"
+              style="background-color: #FF6B35;"
+              on:click={() => goto('/business/dashboard')}
+            >
+              Go to Dashboard →
+            </button>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1">Business name</label>
+              <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={businessName} />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium mb-2">Business type</label>
+              <div class="grid grid-cols-2 gap-2">
+                {#each businessTypes as bt}
+                  {@const Icon = bt.icon}
+                  <button
+                    class="flex items-center gap-2 p-3 rounded-xl border-2 transition-all text-sm font-medium text-left
+                      {businessType === bt.value ? '' : 'border-border text-muted-foreground'}"
+                    style={businessType === bt.value ? 'background-color: #FF6B3515; border-color: #FF6B35; color: #FF6B35;' : ''}
+                    on:click={() => businessType = bt.value}
+                  >
+                    <Icon class="w-4 h-4 flex-shrink-0" />
+                    {bt.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium mb-1">Description</label>
+              <textarea rows="2" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground resize-none" bind:value={businessDescription} />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium mb-1">Phone</label>
+                <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={businessPhone} />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Address</label>
+                <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={businessAddress} />
+              </div>
+            </div>
+
+            <button
+              class="w-full border border-border py-2.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+              on:click={saveBusinessDetails}
+            >
+              Save business details
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- PASSWORD SECTION -->
+      <div class="border-t border-border pt-8 mt-10">
+        <h2 class="text-lg font-bold mb-5">Change password</h2>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Current password</label>
+            <input type="password" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={oldPassword} placeholder="Current password" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">New password</label>
+            <input type="password" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={newPassword} placeholder="Min 8 characters" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Confirm new password</label>
+            <input type="password" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={confirmPassword} placeholder="Repeat new password" />
+          </div>
+          <button
+            class="w-full border border-border py-2.5 rounded-xl text-sm font-semibold hover:bg-muted transition-colors"
+            on:click={changePassword}
+          >
+            Change password
+          </button>
+        </div>
+      </div>
+
+      <!-- DANGER ZONE -->
+      <div class="border-t border-red-200 pt-8 mt-10">
+        <h2 class="text-lg font-bold text-red-500 mb-2">Danger zone</h2>
+        <p class="text-sm text-muted-foreground mb-4">Once deleted, your account cannot be recovered.</p>
+        <button
+          class="border border-red-300 text-red-500 px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+          on:click={() => showDeleteModal = true}
+        >
+          Delete account
+        </button>
+      </div>
+    </div>
+  </main>
+</div>

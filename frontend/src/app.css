@@ -16,7 +16,7 @@
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-muted-foreground: hsl(var(--muted-foreground));
-  
+  --color-background: hsl(var(--background));
   --color-app-secondary:  hsl(var(--app-secondary));
   --color-foreground: hsl(var(--foreground));
 }
