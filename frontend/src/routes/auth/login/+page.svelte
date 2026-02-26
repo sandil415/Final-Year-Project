@@ -1,16 +1,18 @@
 <script>
   import pb from '$lib/pocketbase';
   import { goto } from '$app/navigation';
+  import { EyeIcon, EyeSlashIcon } from 'phosphor-svelte';
 
   let email = '';
   let password = '';
+  let showPassword = false;
   let error = '';
 
   async function login() {
     error = '';
     try {
       await pb.collection('users').authWithPassword(email, password);
-      goto('/demo');
+      goto('/home');
     } catch (err) {
       if (err instanceof Error) {
         error = err.message;
@@ -71,16 +73,31 @@
                focus:outline-none focus:ring-2 focus:ring-primary mb-4"
       />
 
-      <input
-        type="password"
+      <div class="relative flex items-center justify-center w-full mb-4">
+        <input
+        type={showPassword ? 'text': 'password'}
         placeholder="Password"
         bind:value={password}
         class="w-full rounded-lg border border-border bg-white
                px-4 py-3 text-black placeholder:text-gray-500
-               focus:outline-none focus:ring-2 focus:ring-primary mb-4"
-      />
+               focus:outline-none focus:ring-2 focus:ring-primary"
+        />
 
-      
+        <button
+          type="button"
+          class="absolute right-3 top-1/2 -translate-y-1/2
+                text-gray-500 hover:text-gray-700 transition-colors"
+          on:click={() => showPassword = !showPassword}
+          aria-label={showPassword ? 'Hide password' : 'Show password'}
+        >
+          {#if showPassword}
+            <EyeSlashIcon size={20} />
+          {:else}
+            <EyeIcon size={20} />
+          {/if}
+        </button>
+      </div>
+
 
       <button
         class="w-full bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-secondary transition-colors mb-6"
