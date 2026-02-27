@@ -27,7 +27,7 @@
       const safeQuery = query.trim();
 
       const res = await pb.collection('users').getList(1, 10, {
-        filter: `username ?~ "${safeQuery}"`,
+        filter: `accountType = "business" && (username ?~ "${safeQuery}" || businessName ?~ "${safeQuery}")`,
         sort: 'username'
       });
 
@@ -87,7 +87,17 @@
               class="w-10 h-10 rounded-full object-cover"
             />
 
-            <span class="font-medium">{user.username}</span>
+            <div class="flex flex-col">
+              <span class="font-medium">{user.username}</span>
+              {#if user.businessName}
+                <span class="text-xs text-muted-foreground">
+                  {user.businessName}
+                  {#if user.businessType}
+                    · {user.businessType}
+                  {/if}
+                </span>
+              {/if}
+            </div>
           </button>
         {/each}
 

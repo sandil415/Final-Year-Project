@@ -62,7 +62,7 @@
 
   async function loadMenuCount() {
     try {
-      const r = await pb.collection('menu_items').getList(1, 1, {
+      const r = await pb.collection('menuItems').getList(1, 1, {
         filter: `seller = "${user.id}"`
       });
       menuCount = r.totalItems;

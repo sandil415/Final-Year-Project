@@ -8,6 +8,7 @@
   import Header from '$lib/components/Header.svelte';
   import PostModal from '$lib/components/PostModal.svelte';
   import HighlightsSection from '$lib/components/HighlightsSection.svelte';
+  import { cart, cartItems, cartCount, cartTotal, addItem as addCartItem, removeItem as removeCartItem, clearCart as clearCartStore } from '$lib/stores/cart';
 
   let user = null;
   let loading = true;
@@ -36,7 +37,6 @@
   let menuLoaded = false;
 
   // Cart (for ordering from business profiles)
-  let cart = {}; // { itemId: { item, quantity } }
   let showCart = false;
   let orderNotes = '';
   let orderAddress = '';
@@ -63,6 +63,22 @@
     food_truck: Truck,
     catering: UtensilsCrossed
   };
+
+  async function loadFollowData() {
+    try {
+      const followersData = await pb.collection('follows').getList(1, 1, {
+        filter: `following = "${user.id}"`
+      });
+      followersCount = followersData.totalItems;
+
+      const followingData = await pb.collection('follows').getList(1, 1, {
+        filter: `follower = "${user.id}"`
+      });
+      followingCount = followingData.totalItems;
+    } catch (err) {
+      console.error('Failed to load follow stats:', err);
+    }
+  }
 
   onMount(async () => {
     requireAuth();
@@ -166,7 +182,7 @@
     if (menuLoaded) return;
     loadingMenu = true;
     try {
-      const result = await pb.collection('menu_items').getFullList({
+      const result = await pb.collection('menuItems').getFullList({
         filter: `seller = "${user.id}" && isAvailable = true`,
         sort: 'category,name'
       });
@@ -181,6 +197,9 @@
   }
 
   function switchTab(tab) {
+    if (tab === 'menu' && user?.accountType !== 'business') {
+      return;
+    }
     profileTab = tab;
     if (tab === 'menu' && !menuLoaded) {
       loadPublicMenu();
@@ -189,31 +208,18 @@
 
   // Cart logic
   function addToCart(item) {
-    if (cart[item.id]) {
-      cart[item.id].quantity += 1;
-    } else {
-      cart[item.id] = { item, quantity: 1 };
-    }
-    cart = cart;
+    addCartItem(item, 1);
     showToast(`${item.name} added to cart`);
   }
 
   function removeFromCart(itemId) {
-    if (cart[itemId]) {
-      cart[itemId].quantity -= 1;
-      if (cart[itemId].quantity <= 0) delete cart[itemId];
-      cart = cart;
-    }
+    removeCartItem(itemId, 1);
   }
 
   function clearCart() {
-    cart = {};
+    clearCartStore();
     showCart = false;
   }
-
-  $: cartItems = Object.values(cart);
-  $: cartCount = cartItems.reduce((sum, c) => sum + c.quantity, 0);
-  $: cartTotal = cartItems.reduce((sum, c) => sum + c.item.price * c.quantity, 0);
 
   async function placeOrder() {
     if (cartItems.length === 0) return;
@@ -439,7 +445,7 @@
   </div>
 {/if}
 
-<div class="h-screen flex bg-background text-foreground overflow-hidden">
+<div class="min-h-screen flex flex-col bg-background text-foreground">
   <Header />
 
   <main class="flex-1 overflow-y-auto">
@@ -669,7 +675,7 @@
                     <h3 class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3 px-1">{category}</h3>
                     <div class="space-y-2">
                       {#each items as item}
-                        {@const inCart = cart[item.id]?.quantity || 0}
+                        {@const inCart = $cart[item.id]?.quantity || 0}
                         <div class="flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-border/60 transition-colors">
                           <!-- Food image -->
                           {#if item.image}

@@ -114,6 +114,9 @@
             <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all" on:click={goto('/create')}>
               CREATE YOUR POSTS
             </button>
+            <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all" on:click={goto('/profile/edit')}>
+              START SELLING FOOD
+            </button>
           </div>
         </div>
         

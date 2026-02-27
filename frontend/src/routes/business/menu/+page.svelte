@@ -35,7 +35,7 @@
   async function loadMenu() {
     try {
       loading = true;
-      const result = await pb.collection('menu_items').getFullList({
+      const result = await pb.collection('menuItems').getFullList({
         filter: `seller = "${user.id}"`,
         sort: 'category,name'
       });
@@ -86,11 +86,11 @@
 
     try {
       if (editingItem) {
-        const updated = await pb.collection('menu_items').update(editingItem.id, data);
+        const updated = await pb.collection('menuItems').update(editingItem.id, data);
         menuItems = menuItems.map(i => i.id === editingItem.id ? updated : i);
         showToast('Item updated!');
       } else {
-        const created = await pb.collection('menu_items').create(data);
+        const created = await pb.collection('menuItems').create(data);
         menuItems = [...menuItems, created];
         showToast('Item added!');
       }
@@ -102,7 +102,7 @@
 
   async function toggleAvailability(item) {
     try {
-      const updated = await pb.collection('menu_items').update(item.id, { isAvailable: !item.isAvailable });
+      const updated = await pb.collection('menuItems').update(item.id, { isAvailable: !item.isAvailable });
       menuItems = menuItems.map(i => i.id === item.id ? updated : i);
     } catch (e) { console.error(e); }
   }
@@ -110,7 +110,7 @@
   async function deleteItem(item) {
     if (!confirm(`Delete "${item.name}"?`)) return;
     try {
-      await pb.collection('menu_items').delete(item.id);
+      await pb.collection('menuItems').delete(item.id);
       menuItems = menuItems.filter(i => i.id !== item.id);
       showToast('Item deleted');
     } catch (e) { showToast('Failed to delete', 'error'); }

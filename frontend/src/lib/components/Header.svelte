@@ -1,19 +1,20 @@
 <script>
-  import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import { BellIcon, ShoppingBagIcon } from "phosphor-svelte";
-  import { onMount, onDestroy } from "svelte";
-  import pb from '$lib/pocketbase';
-  import { Heart, MessageCircle, UserPlus, Bell, X, LayoutDashboard, Compass } from 'lucide-svelte';
+import { goto } from "$app/navigation";
+import { page } from "$app/stores";
+import { BellIcon, ShoppingBagIcon } from "phosphor-svelte";
+import { onMount, onDestroy } from "svelte";
+import pb from '$lib/pocketbase';
+import { Heart, MessageCircle, UserPlus, Bell, X, LayoutDashboard, Compass } from 'lucide-svelte';
+import { cartItems, cartCount } from '$lib/stores/cart';
 
-  let mobileMenuOpen = false;
-  let notificationPanelOpen = false;
-  let notifications = [];
-  let unreadCount = 0;
-  let cartCount = 3;
-  let loading = false;
-  let currentUser = null;
-  let unsubscribe = null;
+let mobileMenuOpen = false;
+let notificationPanelOpen = false;
+let cartPanelOpen = false;
+let notifications = [];
+let unreadCount = 0;
+let loading = false;
+let currentUser = null;
+let unsubscribe = null;
 
   $: currentPath = $page.url.pathname;
   $: isBusiness = currentUser?.accountType === 'business';
@@ -114,7 +115,6 @@
   }
 
   function getNotificationIcon(type) {
-    const { Heart, MessageCircle, UserPlus, Bell } = { Heart, MessageCircle, UserPlus, Bell };
     switch (type) {
       case 'like': return Heart;
       case 'comment': return MessageCircle;
@@ -201,18 +201,75 @@
           <span class="text-xl font-light">+</span>
           Create
         </a>
+        {#if currentUser && !isBusiness}
+          <button
+            class="px-4 py-2 rounded-full text-xs font-semibold border border-border text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
+            on:click={() => goto('/profile/edit')}
+          >
+            Become a seller
+          </button>
+        {/if}
       </div>
 
       <!-- Right Icons -->
       <div class="flex items-center gap-4">
-        <button class="relative p-2 hover:bg-secondary rounded-full transition-colors">
-          <ShoppingBagIcon class="w-6 h-6"/>
-          {#if cartCount > 0}
-            <span class="absolute -top-1 -right-1 w-5 h-5 text-xs rounded-full flex items-center justify-center font-bold text-white" style="background-color: #FF6B35;">
-              {cartCount > 99 ? '99+' : cartCount}
-            </span>
+        <div class="relative">
+          <button
+            class="relative p-2 hover:bg-secondary rounded-full transition-colors"
+            on:click={() => cartPanelOpen = !cartPanelOpen}
+          >
+            <ShoppingBagIcon class="w-6 h-6"/>
+            {#if $cartCount > 0}
+              <span class="absolute -top-1 -right-1 w-5 h-5 text-xs rounded-full flex items-center justify-center font-bold text-white" style="background-color: #FF6B35;">
+                {$cartCount > 99 ? '99+' : $cartCount}
+              </span>
+            {/if}
+          </button>
+
+          {#if cartPanelOpen}
+            <div class="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-2rem)] bg-background border border-border rounded-2xl shadow-2xl z-40 overflow-hidden">
+              <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+                <span class="text-sm font-semibold">Cart</span>
+                <button class="p-1 hover:bg-secondary rounded-full" on:click={() => cartPanelOpen = false}>
+                  <X class="w-4 h-4 text-muted-foreground" />
+                </button>
+              </div>
+              <div class="max-h-64 overflow-y-auto">
+                {#if $cartItems.length === 0}
+                  <div class="py-6 px-5 text-sm text-muted-foreground">
+                    Your cart is empty.
+                  </div>
+                {:else}
+                  <div class="py-3 px-4 space-y-2">
+                    {#each $cartItems as entry}
+                      <div class="flex items-center justify-between gap-3 text-sm">
+                        <div class="flex-1 min-w-0">
+                          <p class="font-medium truncate">{entry.item.name}</p>
+                          <p class="text-xs text-muted-foreground">× {entry.quantity}</p>
+                        </div>
+                        <span class="text-xs font-semibold text-muted-foreground">
+                          रु {(entry.item.price * entry.quantity).toFixed(2)}
+                        </span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              {#if $cartItems.length > 0}
+                <div class="px-5 py-3 border-t border-border flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Items: {$cartCount}</span>
+                  <button
+                    class="text-xs font-semibold px-3 py-1.5 rounded-lg text-white hover:opacity-90"
+                    style="background-color: #FF6B35;"
+                    on:click={() => { cartPanelOpen = false; goto('/profile'); }}
+                  >
+                    View details
+                  </button>
+                </div>
+              {/if}
+            </div>
           {/if}
-        </button>
+        </div>
 
         <!-- Notifications -->
         <div class="relative">
