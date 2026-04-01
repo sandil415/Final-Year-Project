@@ -14,7 +14,7 @@
         password,
         passwordConfirm: password,
         username,
-        role: 'user'
+        accountType: 'personal'
       });
 
       console.log('User created', user);

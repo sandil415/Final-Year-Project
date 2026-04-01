@@ -148,7 +148,7 @@
         </button>
         <img
           src={otherUser.avatar
-            ? pb.files.getUrl(otherUser, otherUser.avatar)
+            ? pb.files.getURL(otherUser, otherUser.avatar)
             : '/images/profilePlaceholder.jpg'}
           alt={otherUser.username}
           class="w-10 h-10 rounded-full object-cover"
@@ -170,10 +170,10 @@
                 <p class="text-sm break-words">{m.content}</p>
               {/if}
               {#if m.type === 'image'} 
-                <img src={pb.files.getUrl(m, m.media)} class="max-w-xs rounded-lg" alt="Image"/> 
+                <img src={pb.files.getURL(m, m.media)} class="max-w-xs rounded-lg" alt="Image"/> 
               {/if}
               {#if m.type === 'video'} 
-                <video src={pb.files.getUrl(m, m.media)} controls class="max-w-xs rounded-lg"/> 
+                <video src={pb.files.getURL(m, m.media)} controls class="max-w-xs rounded-lg"/> 
               {/if}
             </div>
             <div class="text-xs text-muted-foreground mt-1 px-2 {m.sender === currentUser.id ? 'text-right' : 'text-left'}">

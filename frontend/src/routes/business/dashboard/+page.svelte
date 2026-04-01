@@ -12,6 +12,9 @@
   let loading = true;
   let activeTab = 'pending';
 
+  // Graph state
+  let graphRange = '7'; // '7' | '14' | '30'
+
   const tabs = ['pending', 'confirmed', 'preparing', 'ready', 'delivered'];
   const statusColors = {
     pending:   'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
@@ -36,12 +39,11 @@
 
   onMount(async () => {
     requireAuth();
-    user = pb.authStore.model;
+    user = pb.authStore.record ?? pb.authStore.model;
     if (user.accountType !== 'business') { goto('/profile'); return; }
     await Promise.all([loadOrders(), loadMenuCount()]);
     loading = false;
 
-    // Realtime order updates
     pb.collection('orders').subscribe('*', async (e) => {
       if (e.record.seller === user.id) await loadOrders();
     });
@@ -50,7 +52,7 @@
   async function loadOrders() {
     try {
       const result = await pb.collection('orders').getFullList({
-        filter: `seller = "${user.id}"`,
+        filter: `seller.id = "${user.id}"`,
         sort: '-created',
         expand: 'buyer'
       });
@@ -73,15 +75,21 @@
     try {
       await pb.collection('orders').update(order.id, { status });
       orders = orders.map(o => o.id === order.id ? { ...o, status } : o);
-      // Notify buyer
+    } catch (e) {
+      console.error('Order update failed:', e);
+      return;
+    }
+    try {
       await pb.collection('notifications').create({
-        user: order.buyer,
+        user: order.expand?.buyer?.id || order.buyer,
         triggeredBy: user.id,
-        type: 'message',
+        type: status === 'cancelled' ? 'orderCancelled' : 'orderAccepted',
         message: `Your order from ${user.businessName} is now ${status}.`,
         read: false
       });
-    } catch (e) { console.error(e); }
+    } catch (notifErr) {
+      console.error('Notification failed:', notifErr?.response?.data);
+    }
   }
 
   async function cancelOrder(order) {
@@ -91,6 +99,54 @@
   $: filteredOrders = orders.filter(o => o.status === activeTab);
   $: pendingCount = orders.filter(o => o.status === 'pending').length;
 
+  // ── Income graph ──────────────────────────────────────────────
+  // Build daily income buckets from delivered orders only
+  $: incomeData = (() => {
+    const days = parseInt(graphRange);
+    const buckets = {};
+
+    // Pre-fill every day in range with 0 so gaps show
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      buckets[d.toLocaleDateString('en-CA')] = 0; // YYYY-MM-DD key
+    }
+
+    // Sum delivered orders into their day bucket
+    for (const order of orders) {
+      if (order.status !== 'delivered') continue;
+      const key = new Date(order.created).toLocaleDateString('en-CA');
+      if (key in buckets) {
+        buckets[key] = (buckets[key] || 0) + (order.totalAmount || 0);
+      }
+    }
+
+    return Object.entries(buckets).map(([date, amount]) => ({
+      date,
+      label: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      amount,
+    }));
+  })();
+
+  $: maxIncome = Math.max(...incomeData.map(d => d.amount), 1);
+  $: totalIncome = incomeData.reduce((s, d) => s + d.amount, 0);
+  $: avgIncome = incomeData.length ? totalIncome / incomeData.length : 0;
+
+  // Tooltip state
+  let hoveredBar = null;
+  let tooltipX = 0;
+  let tooltipY = 0;
+
+  function onBarEnter(e, bar) {
+    hoveredBar = bar;
+    tooltipX = e.clientX;
+    tooltipY = e.clientY;
+  }
+  function onBarLeave() { hoveredBar = null; }
+  function onBarMove(e) {
+    if (hoveredBar) { tooltipX = e.clientX; tooltipY = e.clientY; }
+  }
+
   function formatTime(dateString) {
     return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
@@ -99,11 +155,22 @@
   }
 </script>
 
+<!-- Tooltip (portal-style, fixed) -->
+{#if hoveredBar}
+  <div
+    class="fixed z-50 pointer-events-none px-3 py-2 rounded-lg text-xs font-semibold text-white shadow-xl"
+    style="left: {tooltipX + 12}px; top: {tooltipY - 40}px; background-color: #FF6B35;"
+  >
+    <div>{hoveredBar.label}</div>
+    <div>Rs. {hoveredBar.amount.toFixed(2)}</div>
+  </div>
+{/if}
+
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
   <Header />
   <main class="flex-1 overflow-y-auto">
     <div class="max-w-5xl mx-auto p-6">
-      
+
       <!-- Header -->
       <div class="flex items-center justify-between mb-8">
         <div>
@@ -143,8 +210,8 @@
         {/each}
       </div>
 
-      <!-- Orders -->
-      <div class="bg-card border border-border rounded-2xl overflow-hidden">
+      <!-- Orders table -->
+      <div class="bg-card border border-border rounded-2xl overflow-hidden mb-6">
         <div class="px-5 py-4 border-b border-border flex items-center justify-between">
           <h2 class="font-bold text-foreground">Orders</h2>
           {#if pendingCount > 0}
@@ -170,7 +237,6 @@
           {/each}
         </div>
 
-        <!-- Order list -->
         {#if loading}
           <div class="p-10 text-center text-muted-foreground">Loading orders...</div>
         {:else if filteredOrders.length === 0}
@@ -193,23 +259,17 @@
                         {order.status}
                       </span>
                     </div>
-
-                    <!-- Items -->
                     <div class="text-sm text-muted-foreground mb-2">
-                      {#each (typeof order.items === 'string' ? JSON.parse(order.items) : order.items) as item}
+                      {#each (order.items || []) as item, i}
                         <span>{item.quantity}× {item.name}</span>
-                        {#if item !== (typeof order.items === 'string' ? JSON.parse(order.items) : order.items).at(-1)}<span class="mx-1">·</span>{/if}
+                        {#if i < (order.items || []).length - 1}<span class="mx-1">·</span>{/if}
                       {/each}
                     </div>
-
                     {#if order.notes}
                       <p class="text-xs text-muted-foreground italic mb-2">Note: "{order.notes}"</p>
                     {/if}
-
-                    <p class="text-sm font-bold text-foreground">रु {order.totalAmount?.toFixed(2)}</p>
+                    <p class="text-sm font-bold text-foreground">Rs. {order.totalAmount?.toFixed(2)}</p>
                   </div>
-
-                  <!-- Actions -->
                   <div class="flex flex-col gap-2 flex-shrink-0">
                     {#if nextStatus[order.status]}
                       <button
@@ -235,6 +295,120 @@
           </div>
         {/if}
       </div>
+
+      <!-- ── Income Graph ─────────────────────────────────────── -->
+      <div class="bg-card border border-border rounded-2xl overflow-hidden">
+        <!-- Graph header -->
+        <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4 flex-wrap">
+          <div class="flex items-center gap-2">
+            <TrendingUp class="w-4 h-4" style="color: #FF6B35;" />
+            <h2 class="font-bold text-foreground">Income</h2>
+            <span class="text-xs text-muted-foreground">(delivered orders only)</span>
+          </div>
+
+          <!-- Range selector -->
+          <div class="flex gap-1 bg-muted rounded-lg p-1">
+            {#each [['7','7d'], ['14','14d'], ['30','30d']] as [val, label]}
+              <button
+                class="px-3 py-1 rounded-md text-xs font-semibold transition-colors {graphRange === val ? 'text-white' : 'text-muted-foreground hover:text-foreground'}"
+                style={graphRange === val ? 'background-color: #FF6B35;' : ''}
+                on:click={() => graphRange = val}
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Summary pills -->
+        <div class="flex gap-4 px-5 pt-4 pb-2 flex-wrap">
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Total ({graphRange}d)</span>
+            <span class="text-lg font-bold text-foreground">Rs. {totalIncome.toFixed(0)}</span>
+          </div>
+          <div class="w-px bg-border self-stretch mx-1"></div>
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Daily avg</span>
+            <span class="text-lg font-bold text-foreground">Rs. {avgIncome.toFixed(0)}</span>
+          </div>
+          <div class="w-px bg-border self-stretch mx-1"></div>
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Best day</span>
+            <span class="text-lg font-bold text-foreground">
+              Rs. {Math.max(...incomeData.map(d => d.amount)).toFixed(0)}
+            </span>
+          </div>
+        </div>
+
+        <!-- Bar chart -->
+        <div class="px-5 pb-5 pt-2">
+          {#if loading}
+            <div class="h-40 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>
+          {:else if totalIncome === 0}
+            <div class="h-40 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+              <TrendingUp class="w-8 h-8 opacity-30" />
+              <p class="text-sm">No income in this period yet</p>
+            </div>
+          {:else}
+            <!-- Y-axis labels + bars -->
+            <div class="flex gap-2 items-end" style="height: 160px;">
+              <!-- Y labels -->
+              <div class="flex flex-col justify-between h-full text-right pr-2 flex-shrink-0" style="width:52px">
+                <span class="text-[10px] text-muted-foreground">Rs.{maxIncome.toFixed(0)}</span>
+                <span class="text-[10px] text-muted-foreground">Rs.{(maxIncome/2).toFixed(0)}</span>
+                <span class="text-[10px] text-muted-foreground">0</span>
+              </div>
+
+              <!-- Bars -->
+              <div class="flex-1 flex items-end gap-[3px] h-full relative">
+                <!-- Grid lines -->
+                <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+                  <div class="border-t border-dashed border-border opacity-50"></div>
+                  <div class="border-t border-dashed border-border opacity-50"></div>
+                  <div class="border-t border-border opacity-30"></div>
+                </div>
+
+                {#each incomeData as bar}
+                  {@const heightPct = maxIncome > 0 ? (bar.amount / maxIncome) * 100 : 0}
+                  {@const isToday = bar.date === new Date().toLocaleDateString('en-CA')}
+                  <div
+                    class="relative flex-1 flex flex-col items-center justify-end h-full group cursor-default"
+                    role="img"
+                    aria-label="{bar.label}: Rs. {bar.amount}"
+                    on:mouseenter={(e) => onBarEnter(e, bar)}
+                    on:mouseleave={onBarLeave}
+                    on:mousemove={onBarMove}
+                  >
+                    <!-- Bar fill -->
+                    <div
+                      class="w-full rounded-t-md transition-all duration-300 group-hover:opacity-80"
+                      style="
+                        height: {Math.max(heightPct, bar.amount > 0 ? 4 : 0)}%;
+                        background-color: {isToday ? '#FF6B35' : '#FF6B3560'};
+                        min-height: {bar.amount > 0 ? '4px' : '0'};
+                      "
+                    ></div>
+
+                    <!-- X label — show every Nth to avoid clutter -->
+                    {#if incomeData.length <= 10 || incomeData.indexOf(bar) % Math.ceil(incomeData.length / 8) === 0 || isToday}
+                      <span
+                        class="absolute -bottom-5 text-[9px] whitespace-nowrap {isToday ? 'font-bold' : 'text-muted-foreground'}"
+                        style={isToday ? 'color: #FF6B35;' : ''}
+                      >
+                        {isToday ? 'Today' : bar.label}
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+
+            <!-- X-axis spacer for labels -->
+            <div class="h-6"></div>
+          {/if}
+        </div>
+      </div>
+
     </div>
   </main>
 </div>

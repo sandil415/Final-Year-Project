@@ -6,7 +6,6 @@
 
 * {
     font-family: 'PP Neue Montreal', sans-serif;
-
 }
 
 @theme {
@@ -19,6 +18,7 @@
   --color-background: hsl(var(--background));
   --color-app-secondary:  hsl(var(--app-secondary));
   --color-foreground: hsl(var(--foreground));
+  --color-activeColor: hsl(var(--activeColor));
 }
 
 @layer base {
@@ -32,9 +32,10 @@
     --accent: 0 0% 96.1%;
     --accent-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
+    --muted-foreground: 0 0% 75.1%;
     --border: 0 0% 89.8%;
     --app-primary: 16 100% 60%;
+    --activeColor: 120 100% 50%;
 
   }
 
@@ -49,9 +50,10 @@
       --accent: 0 0% 14.9%;
       --accent-foreground: 0 0% 98%;
       --muted: 0 0% 14.9%;
-      --muted-foreground: 0 0% 63.9%;
+      --muted-foreground: 0 0% 75%;
       --border: 0 0% 14.9%;
       --app-primary: 16 100% 60%;
+      --activeColor: 120 100% 50%;
     }
   }
 
@@ -149,4 +151,36 @@
   line-height: 1.25;
   letter-spacing: 0;
   font-size: clamp(1.25rem, 2vw + 0.5rem, 1.75rem);
+}
+
+[data-theme="light"] {
+  --background: 0 0% 100%;
+  --foreground: 0 0% 3.9%;
+  --primary: 0 0% 9%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 0 0% 96.1%;
+  --secondary-foreground: 0 0% 9%;
+  --accent: 0 0% 96.1%;
+  --accent-foreground: 0 0% 9%;
+  --muted: 0 0% 96.1%;
+  --muted-foreground: 0 0% 75.1%;
+  --border: 0 0% 89.8%;
+  --app-primary: 16 100% 60%;
+  --activeColor: 120 100% 50%;
+}
+
+[data-theme="dark"] {
+  --background: 0 0% 3.9%;
+  --foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 0 0% 9%;
+  --secondary: 0 0% 14.9%;
+  --secondary-foreground: 0 0% 98%;
+  --accent: 0 0% 14.9%;
+  --accent-foreground: 0 0% 98%;
+  --muted: 0 0% 14.9%;
+  --muted-foreground: 0 0% 75%;
+  --border: 0 0% 14.9%;
+  --app-primary: 16 100% 60%;
+  --activeColor: 120 100% 50%;
 }

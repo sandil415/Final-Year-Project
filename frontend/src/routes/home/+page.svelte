@@ -4,81 +4,147 @@
   import 'leaflet/dist/leaflet.css';
   import Header from '$lib/components/Header.svelte';
   import FloatingImage from '$lib/components/FloatingImage.svelte';
-	import { goto } from '$app/navigation';
-  import { ArrowRightIcon, MagnifyingGlassIcon } from 'phosphor-svelte';
-  
+  import { goto } from '$app/navigation';
+  import { ArrowRightIcon, MagnifyingGlassIcon, StarIcon, CookingPotIcon } from 'phosphor-svelte';
+  import pb from '$lib/pocketbase';
+
   let map;
   let mapContainer;
-  
-  // Sample food spots in Kathmandu
+  let currentUser = null;
+  let locationError = null;
+  let locating = true;
+  let recentPosts = [];
+  let loadingPosts = true;
+
   const foodSpots = [
-    { id: 1, name: "Thamel Momo Corner", lat: 27.7172, lng: 85.3240, type: "Restaurant", cuisine: "Nepali" },
-    { id: 2, name: "Newari Kitchen", lat: 27.6915, lng: 85.3209, type: "Home Kitchen", cuisine: "Newari" },
-    { id: 3, name: "Dal Bhat House", lat: 27.7089, lng: 85.3312, type: "Restaurant", cuisine: "Nepali" },
-    { id: 4, name: "Street Food Hub", lat: 27.7000, lng: 85.3100, type: "Street Food", cuisine: "Mixed" },
-    { id: 5, name: "Himalayan Sweets", lat: 27.7250, lng: 85.3400, type: "Bakery", cuisine: "Desserts" }
+    { id: 1, name: "Momo Corner",     lat: 27.7172, lng: 85.3240, type: "Restaurant",   cuisine: "Nepali"   },
+    { id: 2, name: "Newari Kitchen",  lat: 27.6915, lng: 85.3209, type: "Home Kitchen", cuisine: "Newari"   },
+    { id: 3, name: "Momo",            lat: 27.7089, lng: 85.3312, type: "Restaurant",   cuisine: "Nepali"   },
+    { id: 4, name: "Street Food Hub", lat: 27.7000, lng: 85.3100, type: "Street Food",  cuisine: "Mixed"    },
+    { id: 5, name: "Sweets Shops",    lat: 27.7250, lng: 85.3400, type: "Bakery",       cuisine: "Desserts" }
   ];
-  
+
   const featuredDishes = [
-    { id: 1, name: "Momo Platter", price: "250", image: "🥟", rating: 4.8, seller: "Thamel Momo Corner" },
-    { id: 2, name: "Dal Bhat Set", price: "350", image: "🍛", rating: 4.9, seller: "Dal Bhat House" },
-    { id: 3, name: "Newari Khaja Set", price: "450", image: "🍱", rating: 4.7, seller: "Newari Kitchen" }
+    { id: 1, name: "Momo Platter",     price: "250", rating: 4.8, seller: "Thamel Momo Corner" },
+    { id: 2, name: "Dal Bhat Set",     price: "350", rating: 4.9, seller: "Dal Bhat House"      },
+    { id: 3, name: "Newari Khaja Set", price: "450", rating: 4.7, seller: "Newari Kitchen"      }
   ];
-  
-  const trendingNow = [
-    { id: 1, name: "Chatamari", image: "🫓", orders: "234" },
-    { id: 2, name: "Sel Roti", image: "🍩", orders: "189" },
-    { id: 3, name: "Yomari", image: "🥟", orders: "156" },
-    { id: 4, name: "Samosa", image: "🥟", orders: "298" }
-  ];
-  
+
   let searchQuery = '';
   let activeCategory = 'all';
-  
-  onMount(() => {
-    // Initialize Leaflet map
-    map = L.map(mapContainer, {
-      center: [27.7172, 85.3240], // Kathmandu as the center
-      zoom: 13,
-      zoomControl: true
-    });
-    
-    // Add OpenStreetMap tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
-      maxZoom: 19
-    }).addTo(map);
-    
-    // Add food spot markers
-    foodSpots.forEach(spot => {
-      const markerIcon = L.divIcon({
-        className: 'custom-marker',
-        html: `
-          <div class="marker-pin">
-            <div class="marker-inner">
-              <span class="marker-icon">🍽️</span>
-            </div>
-          </div>
-        `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 40]
+
+  onMount(async () => {
+    currentUser = pb.authStore.record ?? pb.authStore.model;
+
+    // Posts fetch
+    try {
+      const result = await pb.collection('posts').getList(1, 5, {
+        sort: '-created',
+        filter: `image != ""`,
+        expand: 'user',
       });
-      
-      L.marker([spot.lat, spot.lng], { icon: markerIcon })
-        .addTo(map)
-        .bindPopup(`
-          <div class="p-2">
-            <h3 class="font-bold text-sm mb-1">${spot.name}</h3>
-            <p class="text-xs text-muted-foreground">${spot.cuisine} • ${spot.type}</p>
-          </div>
-        `);
-    });
-  });
-  
+      recentPosts = result.items;
+    } catch (err) {
+      console.error('Failed to load posts:', err);
+      recentPosts = [];
+    } finally {
+      loadingPosts = false;
+    }
+
+    function initMap(lat, lng, isUserLocation = false) {
+      map = L.map(mapContainer, {
+        center: [lat, lng],
+        zoom: isUserLocation ? 15 : 13,
+        zoomControl: true
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19
+      }).addTo(map);
+
+      if (isUserLocation) {
+        console.log("HELLLOOOO");
+        const userIcon = L.divIcon({
+          className: 'custom-marker',
+          html: `
+            <div class="user-location-pin">
+              <div class="user-location-inner">
+                <div class="user-location-dot"></div>
+              </div>
+              <div class="user-location-ring"></div>
+            </div>
+          `,
+          iconSize: [40, 40],
+          iconAnchor: [20, 20]
+        });
+
+        L.marker([lat, lng], { icon: userIcon })
+          .addTo(map)
+          .bindPopup(`
+            <div class="p-2">
+              <h3 class="font-bold text-sm mb-1">Current Location</h3>
+              <p class="text-xs text-muted-foreground">Your current location</p>
+            </div>
+          `)
+          .openPopup();
+      }
+
+      // Orange food spot markers
+      foodSpots.forEach(spot => {
+        const markerIcon = L.divIcon({
+          className: 'custom-marker',
+          html: `
+            <div class="marker-pin">
+              <div class="marker-inner">
+                <span class="marker-icon">dx</span>
+              </div>
+            </div>
+          `,
+          iconSize: [40, 40],
+          iconAnchor: [20, 40]
+        });
+
+        L.marker([spot.lat, spot.lng], { icon: markerIcon })
+          .addTo(map)
+          .bindPopup(`
+            <div class="p-2">
+              <h3 class="font-bold text-sm mb-1">${spot.name}</h3>
+              <p class="text-xs text-muted-foreground">${spot.cuisine} • ${spot.type}</p>
+            </div>
+          `);
+      });
+
+      locating = false;
+    } 
+
+    // GPS logic  also inside onMount
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          initMap(position.coords.latitude, position.coords.longitude, true);
+        },
+        (error) => {
+          console.warn('Geolocation unavailable:', error.message);
+          locationError = error.code;
+          initMap(27.7172, 85.3240, false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: 300000
+        }
+      );
+    } else {
+      initMap(27.7172, 85.3240, false);
+    }
+
+  }); // ← onMount closes here
+
   function handleSearch() {
     console.log('Searching for:', searchQuery);
   }
-  
+
   function setCategory(category) {
     activeCategory = category;
   }
@@ -103,7 +169,7 @@
             CUISINES
           </h1>
           
-          <p class="text-content max-w-md text-muted-foreground">
+          <p class="text-muted-foreground max-w-md">
             Connect with home cooks, restaurants, and food lovers across Nepal. Share recipes, order dishes, and celebrate our culinary heritage.
           </p>
           
@@ -139,18 +205,63 @@
   </section>
 
   <!-- Trending Now -->
-  <section class="max-w-7xl mx-auto px-6 py-16">
-    <h3 class="h3 mb-8">Trending Now</h3>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      {#each trendingNow as item}
-        <button class="trending-card bg-background border-2 border-border p-6 rounded-2xl hover:border-orange transition-all hover:shadow-lg group">
-          <div class="text-5xl mb-3">{item.image}</div>
-          <h4 class="font-bold mb-1">{item.name}</h4>
-          <p class="text-xs text-muted-foreground">{item.orders} orders today</p>
+<section class="max-w-7xl mx-auto px-6 py-16">
+  <div class="flex items-center justify-between mb-8">
+    <h3 class="h3">Trending Now</h3>
+    <button
+      class="text-sm font-semibold hover:opacity-70"
+      style="color: #FF6B35;"
+      on:click={() => goto('/home')}
+    >
+      See all →
+    </button>
+  </div>
+
+  {#if loadingPosts}
+    <!-- Shows 5 grey placeholder boxes while loading -->
+    <div class="posts-grid">
+      {#each Array(5) as _}
+        <div class="aspect-[9/16] rounded-2xl skeleton"></div>
+      {/each}
+    </div>
+
+  {:else if recentPosts.length === 0}
+    <p class="text-muted-foreground text-center py-10">No posts yet.</p>
+
+  {:else}
+    <!-- 5 real post images from PocketBase -->
+    <div class="posts-grid">
+      {#each recentPosts as post}
+        <button
+          class="aspect-[9/16] relative overflow-hidden rounded-2xl group post-card"
+          on:click={() => goto('/home')}
+        >
+          <img
+            src={pb.files.getUrl(post, post.image)}
+            alt=""
+            class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            loading="lazy"
+          />
+          <!-- Username fades in on hover -->
+          <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 post-overlay flex flex-col justify-end p-3">
+            <div class="flex items-center gap-2">
+              <img
+                src={post.expand?.user?.avatar
+                  ? pb.files.getUrl(post.expand.user, post.expand.user.avatar)
+                  : '/images/profilePlaceholder.jpg'}
+                alt=""
+                class="w-6 h-6 rounded-full object-cover border border-white/40"
+              />
+              <span class="text-white text-xs font-semibold truncate">
+                {post.expand?.user?.username ?? ''}
+              </span>
+            </div>
+          </div>
         </button>
       {/each}
     </div>
-  </section>
+  {/if}
+</section>
 
   <!-- Featured Dishes -->
   <section class="max-w-7xl mx-auto px-6 py-16">
@@ -173,8 +284,8 @@
               <p class="text-sm text-muted-foreground">{dish.seller}</p>
             </div>
             <div class="flex items-center justify-between">
-              <span class="price-tag text-2xl font-bold">रू {dish.price}</span>
-              <span class="text-sm font-semibold text-muted-foreground">⭐ {dish.rating}</span>
+              <span class="price-tag text-2xl font-bold">Rs. {dish.price}</span>
+              <span class="flex gap-3 justify-center text-sm font-semibold text-muted-foreground"> <StarIcon/>{dish.rating}</span>
             </div>
             <button class="add-to-cart w-full py-3 rounded-xl font-bold hover:scale-105 transition-all">
               Add to Cart
@@ -245,29 +356,7 @@
       </div>
     </div>
   </section>
-
-  <!-- App Download CTA -->
-  <!-- <section class="max-w-7xl mx-auto px-6 py-16">
-    <div class="app-download-cta relative overflow-hidden rounded-3xl p-12 text-center">
-      <div class="relative z-10 space-y-6 max-w-2xl mx-auto">
-        <div class="flex items-center justify-center gap-6">
-          <div class="app-icon-card">
-            📱
-          </div>
-          <div class="app-icon-card">
-            🍎
-          </div>
-        </div>
-        <h3 class="h2">Get the Tastyhub App</h3>
-        <p class="text-lg text-muted-foreground">Order food, share recipes, and connect with food lovers</p>
-        <div class="rating-box inline-flex items-center gap-3 bg-background px-6 py-3 rounded-full shadow-lg border border-border">
-          <span class="rating-score text-2xl font-bold">4.9</span>
-          <span>⭐⭐⭐⭐⭐</span>
-          <span class="text-sm text-muted-foreground">12,450 reviews</span>
-        </div>
-      </div>
-    </div>
-  </section> -->
+    
 </div>
 
 <style>
@@ -465,4 +554,59 @@
     border-top: none;
     border-right: none;
   }
+
+  .posts-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+/* Subtle lift on hover */
+.post-card {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.10);
+  transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+.post-card:hover {
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  transform: translateY(-2px);
+}
+
+/* Dark gradient at bottom so username text is readable over any image */
+.post-overlay {
+  background: linear-gradient(to top,
+    rgba(0,0,0,0.75) 0%,
+    rgba(0,0,0,0.2) 40%,
+    transparent 100%
+  );
+}
+
+/* Shimmer animation for the grey loading placeholders */
+.skeleton {
+  background: linear-gradient(90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--secondary)) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0;  }
+  100% { background-position: -200% 0; }
+}
+
+:global(.user-location-ring) {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: rgba(59,130,246,0.15);
+  border: 2px solid rgba(59,130,246,0.35);
+  animation: locationPulse 2s ease-out infinite;
+}
+
+@keyframes locationPulse {
+  0%   { transform: scale(0.4); opacity: 1;  }
+  100% { transform: scale(1.5); opacity: 0; }
+}
 </style>

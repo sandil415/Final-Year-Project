@@ -41,9 +41,6 @@
 
 <div class = "h-screen flex flex-col bg-background overflow-hidden">
   <Header />
-  <!-- <div class = "hidden md:block md:w-64 border-r border-border flex-shrink-0 overflow-y-auto">
-    <Header />
-  </div> -->
 
   <main class="flex-1 border-l border-border flex flex-col overflow-y-auto">
     <h2 class="p-4 font-semibold text-lg">Messages</h2>

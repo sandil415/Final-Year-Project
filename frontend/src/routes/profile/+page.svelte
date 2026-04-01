@@ -1,11 +1,11 @@
 <script>
   import pb from '$lib/pocketbase';
   import { onMount } from 'svelte';
-  import { requireAuth } from '$lib/auth';
-  import Sidebar from '$lib/components/Sidebar.svelte';
-  import PostModal from '$lib/components/PostModal.svelte';
   import { goto } from '$app/navigation';
-  import { Camera, Heart, MessageCircle } from 'lucide-svelte';
+  import { requireAuth } from '$lib/auth';
+  import PostModal from '$lib/components/PostModal.svelte';
+  import { Camera, Heart, MessageCircle, LogOut } from 'lucide-svelte';
+  
 	import Header from '$lib/components/Header.svelte';
 
   let user;
@@ -108,6 +108,11 @@
     delete postStats[deletedPostId];
     console.log('Post deleted successfully');
   }
+
+  function logout() {
+    pb.authStore.clear();
+    goto('/auth/login');
+  }
 </script>
 
 {#if user}
@@ -136,6 +141,14 @@
             >
               Edit profile page
             </a>
+
+            <button
+              class="flex items-center gap-1.5 border border-border bg-[hsl(0,100%,50%)] text-foreground px-4 py-1 rounded-lg text-sm hover:bg-muted transition-colors"
+              on:click={logout}
+            >
+              <LogOut class="w-3.5 h-3.5" />
+              Log out
+            </button>
           </div>
 
           <!-- COUNTS -->

@@ -6,6 +6,7 @@ import { onMount, onDestroy } from "svelte";
 import pb from '$lib/pocketbase';
 import { Heart, MessageCircle, UserPlus, Bell, X, LayoutDashboard, Compass } from 'lucide-svelte';
 import { cartItems, cartCount } from '$lib/stores/cart';
+import { showCartDrawer } from '$lib/stores/ui';
 
 let mobileMenuOpen = false;
 let notificationPanelOpen = false;
@@ -180,7 +181,7 @@ let unsubscribe = null;
             {#if link.highlight && isBusiness}
               <!-- Dashboard gets special orange treatment -->
               <span class="flex items-center gap-1.5" style={isActive(link.href) ? 'color: #FF6B35;' : ''}>
-                <LayoutDashboard class="w-3.5 h-3.5" />
+                
                 {link.label}
               </span>
             {:else}
@@ -248,7 +249,7 @@ let unsubscribe = null;
                           <p class="text-xs text-muted-foreground">× {entry.quantity}</p>
                         </div>
                         <span class="text-xs font-semibold text-muted-foreground">
-                          रु {(entry.item.price * entry.quantity).toFixed(2)}
+                          Rs. {(entry.item.price * entry.quantity).toFixed(2)}
                         </span>
                       </div>
                     {/each}
@@ -261,7 +262,7 @@ let unsubscribe = null;
                   <button
                     class="text-xs font-semibold px-3 py-1.5 rounded-lg text-white hover:opacity-90"
                     style="background-color: #FF6B35;"
-                    on:click={() => { cartPanelOpen = false; goto('/profile'); }}
+                    on:click={() => { cartPanelOpen = false; showCartDrawer.set(true); }}
                   >
                     View details
                   </button>

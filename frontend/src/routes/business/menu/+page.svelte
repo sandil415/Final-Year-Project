@@ -152,7 +152,7 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-sm font-medium mb-1">Price (रु) <span class="text-red-500">*</span></label>
+            <label class="block text-sm font-medium mb-1">Price (Rs.) <span class="text-red-500">*</span></label>
             <input type="number" class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground" bind:value={form.price} placeholder="0" min="0" />
           </div>
           <div>
@@ -186,7 +186,7 @@
           <span class="text-sm font-medium">Available to order</span>
           <button on:click={() => form.isAvailable = !form.isAvailable}>
             {#if form.isAvailable}
-              <ToggleRight class="w-7 h-7" style="color: #FF6B35;" />
+              <ToggleRight class="w-7 h-7 text-activeColor"/>
             {:else}
               <ToggleLeft class="w-7 h-7 text-muted-foreground" />
             {/if}
@@ -262,7 +262,7 @@
                         <p class="text-xs text-muted-foreground truncate">{item.description}</p>
                       {/if}
                       <div class="flex items-center gap-3 mt-1">
-                        <span class="text-sm font-bold text-foreground">रु {item.price}</span>
+                        <span class="text-sm font-bold text-foreground">Rs. {item.price}</span>
                         {#if item.preparationTime}
                           <span class="text-xs text-muted-foreground">~{item.preparationTime} min</span>
                         {/if}
@@ -272,7 +272,7 @@
                     <div class="flex items-center gap-1 flex-shrink-0">
                       <button class="p-2 hover:bg-muted rounded-lg transition-colors" on:click={() => toggleAvailability(item)} title={item.isAvailable ? 'Mark unavailable' : 'Mark available'}>
                         {#if item.isAvailable}
-                          <ToggleRight class="w-5 h-5" style="color: #FF6B35;" />
+                          <ToggleRight class="w-5 h-5 text-activeColor" />
                         {:else}
                           <ToggleLeft class="w-5 h-5 text-muted-foreground" />
                         {/if}
