@@ -1,5 +1,4 @@
 <script>
-  import Sidebar from '$lib/components/Sidebar.svelte';
   import pb from '$lib/pocketbase';
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
@@ -7,7 +6,8 @@
   import { goto } from '$app/navigation';
   import { notifyMessage } from '$lib/notifications';
   import Header from '$lib/components/Header.svelte';
-  
+  import { ArrowLeft } from 'lucide-svelte';
+
   let messages = [], conversation = null, currentUser = null;
   let otherUser = null, loading = true, messageInput = '';
   let messagesContainer, unsubscribe;
@@ -17,9 +17,7 @@
     currentUser = pb.authStore.model;
     const conversationId = $page.params.conversationId;
 
-    // Mark user as "active" in this conversation
     await setActiveConversation(conversationId);
-
     await loadConversation(conversationId);
     await loadMessages(conversationId);
     await subscribeToMessages(conversationId);
@@ -29,15 +27,13 @@
 
   onDestroy(async () => {
     unsubscribe?.();
-    // Mark user as no longer active in conversation
     await clearActiveConversation();
   });
 
-  // Track which conversation user is viewing
   async function setActiveConversation(conversationId) {
     try {
-      await pb.collection('users').update(currentUser.id, { 
-        activeConversation: conversationId 
+      await pb.collection('users').update(currentUser.id, {
+        activeConversation: conversationId
       });
     } catch (err) {
       console.error('Failed to set active conversation:', err);
@@ -46,8 +42,8 @@
 
   async function clearActiveConversation() {
     try {
-      await pb.collection('users').update(currentUser.id, { 
-        activeConversation: null 
+      await pb.collection('users').update(currentUser.id, {
+        activeConversation: null
       });
     } catch (err) {
       console.error('Failed to clear active conversation:', err);
@@ -55,20 +51,29 @@
   }
 
   async function loadConversation(convoId) {
-    conversation = await pb.collection('conversations').getOne(convoId, { 
-      expand: 'participants' 
-    });
-    otherUser = conversation.expand.participants.find(p => p.id !== currentUser.id);
-    loading = false;
+    try {
+      conversation = await pb.collection('conversations').getOne(convoId, {
+        expand: 'participants'
+      });
+      otherUser = conversation.expand.participants.find(p => p.id !== currentUser.id);
+    } catch (err) {
+      console.error('Failed to load conversation:', err);
+    } finally {
+      loading = false;
+    }
   }
 
   async function loadMessages(convoId) {
-    const res = await pb.collection('messages').getList(1, 100, { 
-      filter: `conversation = "${convoId}"`, 
-      sort: 'created' 
-    });
-    messages = res.items;
-    setTimeout(scrollToBottom, 100);
+    try {
+      const res = await pb.collection('messages').getList(1, 100, {
+        filter: `conversation = "${convoId}"`,
+        sort: 'created'
+      });
+      messages = res.items;
+      setTimeout(scrollToBottom, 100);
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+    }
   }
 
   async function subscribeToMessages(convoId) {
@@ -88,7 +93,6 @@
     messageInput = '';
 
     try {
-      // Create the message
       await pb.collection('messages').create({
         conversation: conversation.id,
         sender: currentUser.id,
@@ -97,13 +101,11 @@
         read: false
       });
 
-      // Update conversation
       await pb.collection('conversations').update(conversation.id, {
         lastMessage: content,
         lastMessageTime: new Date().toISOString()
       });
 
-      // Create notification using helper function
       notifyMessage(
         otherUser.id,
         currentUser.id,
@@ -131,75 +133,150 @@
       sendMessage();
     }
   }
+
+  function goBack() {
+    if (window.history.length > 1) window.history.back();
+    else goto('/messages');
+  }
+
+  // Derive whether a message is from the current user
+  $: isOwn = (m) => m.sender === currentUser?.id;
 </script>
 
-<div class="h-screen flex flex-col bg-background">
+<div class="h-screen flex flex-col bg-background text-foreground">
   <Header />
-  
-  <main class="flex-1 flex flex-col">
-    <!-- Chat Header -->
-    {#if otherUser}
-      <div class="border-b border-border p-4 flex items-center gap-3 bg-background">
-        <button 
-          on:click={() => goto('/messages')}
-          class="lg:hidden p-2 hover:bg-muted rounded-full"
-        >
-          ← 
-        </button>
+
+  <main class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- ── Chat Header ─────────────────────────────────────────── -->
+    <div class="flex-shrink-0 border-b border-border px-4 py-3 flex items-center gap-3 bg-background">
+      <!-- Back button — always visible -->
+      <button
+        on:click={goBack}
+        class="p-2 hover:bg-muted rounded-full transition-colors flex-shrink-0"
+        aria-label="Go back"
+      >
+        <ArrowLeft class="w-5 h-5 text-foreground" />
+      </button>
+
+      {#if loading}
+        <!-- Skeleton while loading -->
+        <div class="w-10 h-10 rounded-full bg-muted animate-pulse flex-shrink-0"></div>
+        <div class="flex-1 space-y-1.5">
+          <div class="h-3.5 w-28 rounded bg-muted animate-pulse"></div>
+          <div class="h-3 w-16 rounded bg-muted animate-pulse"></div>
+        </div>
+      {:else if otherUser}
         <img
           src={otherUser.avatar
-            ? pb.files.getURL(otherUser, otherUser.avatar)
+            ? pb.files.getUrl(otherUser, otherUser.avatar)
             : '/images/profilePlaceholder.jpg'}
           alt={otherUser.username}
-          class="w-10 h-10 rounded-full object-cover"
+          class="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-1 ring-border"
         />
-        <div class="flex-1">
-          <h2 class="font-semibold text-foreground">{otherUser.username}</h2>
+        <div class="flex-1 min-w-0">
+          <h2 class="font-semibold text-sm text-foreground truncate">{otherUser.username}</h2>
           <p class="text-xs text-muted-foreground">Active now</p>
         </div>
-      </div>
-    {/if}
-
-    <!-- Messages -->
-    <div class="flex-1 overflow-y-auto p-4 space-y-4" bind:this={messagesContainer}>
-      {#each messages as m}
-        <div class="{m.sender === currentUser.id ? 'flex justify-end' : 'flex justify-start'}">
-          <div class="max-w-[70%]">
-            <div class="px-4 py-2 rounded-2xl {m.sender === currentUser.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'}">
-              {#if m.type === 'text'} 
-                <p class="text-sm break-words">{m.content}</p>
-              {/if}
-              {#if m.type === 'image'} 
-                <img src={pb.files.getURL(m, m.media)} class="max-w-xs rounded-lg" alt="Image"/> 
-              {/if}
-              {#if m.type === 'video'} 
-                <video src={pb.files.getURL(m, m.media)} controls class="max-w-xs rounded-lg"/> 
-              {/if}
-            </div>
-            <div class="text-xs text-muted-foreground mt-1 px-2 {m.sender === currentUser.id ? 'text-right' : 'text-left'}">
-              {new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </div>
-          </div>
-        </div>
-      {/each}
+      {/if}
     </div>
 
-    <!-- Input -->
-    <div class="p-4 flex gap-2 border-t border-border bg-background">
-      <input 
-        type="text" 
-        bind:value={messageInput} 
+    <!-- ── Message List ────────────────────────────────────────── -->
+    <div
+      class="flex-1 overflow-y-auto px-4 py-4 space-y-2"
+      bind:this={messagesContainer}
+    >
+      {#if messages.length === 0 && !loading}
+        <div class="flex flex-col items-center justify-center h-full text-center py-16">
+          <div class="w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-3 text-2xl">💬</div>
+          <p class="font-semibold text-sm text-foreground mb-1">No messages yet</p>
+          <p class="text-xs text-muted-foreground">Say hello to {otherUser?.username || 'them'}!</p>
+        </div>
+      {:else}
+        {#each messages as m (m.id)}
+          {@const own = m.sender === currentUser?.id}
+          <div class="flex {own ? 'justify-end' : 'justify-start'} items-end gap-2">
+
+            <!-- Other user avatar (only show for their messages) -->
+            {#if !own}
+              <img
+                src={otherUser?.avatar
+                  ? pb.files.getUrl(otherUser, otherUser.avatar)
+                  : '/images/profilePlaceholder.jpg'}
+                alt=""
+                class="w-7 h-7 rounded-full object-cover flex-shrink-0 mb-1"
+              />
+            {/if}
+
+            <div class="flex flex-col {own ? 'items-end' : 'items-start'} max-w-[68%]">
+
+              <!-- Bubble -->
+              <div
+                class="px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words
+                  {own
+                    ? 'rounded-br-md text-white'
+                    : 'rounded-bl-md bg-muted text-foreground'}"
+                style={own ? 'background-color: #FF6B35;' : ''}
+              >
+                {#if m.type === 'text' || !m.type}
+                  {m.content}
+                {:else if m.type === 'image'}
+                  <img
+                    src={pb.files.getUrl(m, m.media)}
+                    class="max-w-xs rounded-xl"
+                    alt="Image"
+                  />
+                {:else if m.type === 'video'}
+                  <video
+                    src={pb.files.getUrl(m, m.media)}
+                    controls
+                    class="max-w-xs rounded-xl"
+                  />
+                {/if}
+              </div>
+
+              <!-- Timestamp -->
+              <span class="text-[10px] text-muted-foreground mt-1 px-1">
+                {new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+
+            </div>
+
+            <!-- Spacer on the left for own messages (keeps layout symmetric) -->
+            {#if own}
+              <div class="w-7 flex-shrink-0"></div>
+            {/if}
+
+          </div>
+        {/each}
+      {/if}
+    </div>
+
+    <!-- ── Input Bar ───────────────────────────────────────────── -->
+    <div class="flex-shrink-0 px-4 py-3 flex items-center gap-2 border-t border-border bg-background">
+      <input
+        type="text"
+        bind:value={messageInput}
         on:keypress={handleKeyPress}
-        placeholder="Message..." 
-        class="flex-1 px-4 py-2.5 rounded-full bg-muted outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+        placeholder="Message {otherUser?.username || ''}…"
+        class="flex-1 px-4 py-2.5 rounded-full bg-muted outline-none text-sm text-foreground
+               placeholder:text-muted-foreground focus:ring-2 focus:ring-border transition-shadow"
       />
-      <button 
-        on:click={sendMessage} 
+      <button
+        on:click={sendMessage}
         disabled={!messageInput.trim()}
-        class="px-6 py-2.5 bg-primary text-primary-foreground rounded-full font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+        class="w-10 h-10 rounded-full flex items-center justify-center text-white
+               hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all
+               flex-shrink-0"
+        style="background-color: #FF6B35;"
+        aria-label="Send message"
       >
-        Send
+        <!-- Send icon (inline SVG — no extra import needed) -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 translate-x-0.5">
+          <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+        </svg>
       </button>
     </div>
+
   </main>
 </div>

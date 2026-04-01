@@ -34,19 +34,6 @@
     }
   }
 
-  // async function forgetPassword() {
-  //   if (!email) {
-  //     error = 'Enter your email first';
-  //     return;
-  //   }
-
-  //   try {
-  //     await pb.collection('users').requestPasswordReset(email);
-  //     alert('Password reset email sent!');
-  //   } catch (err) {
-  //     error = 'Failed to send reset email';
-  //   }
-  // }
 </script>
 
 <div class="flex min-h-screen">
@@ -96,7 +83,7 @@
       <button
         class="w-full bg-primary text-primary-foreground
               py-3 rounded-lg font-medium
-              hover:bg-secondary transition-colors mb-6"
+              hover:bg-app-primary transition-colors mb-6"
         on:click={signup}
       >
         Sign Up

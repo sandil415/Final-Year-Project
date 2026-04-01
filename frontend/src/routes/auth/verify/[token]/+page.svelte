@@ -34,7 +34,7 @@
       <h1 class="text-3xl font-bold text-green-600 mb-4">✓ Success!</h1>
       <p class="text-lg">{message}</p>
     {:else}
-      <h1 class="text-3xl font-bold text-red-600 mb-4">✗ Error</h1>
+      <h1 class="text-3xl font-bold text-red-600 mb-4">Error</h1>
       <p class="text-lg">{message}</p>
       <a href="/auth/signup" class="text-primary underline mt-4 inline-block">
         Request new verification email

@@ -100,7 +100,7 @@
 
 
       <button
-        class="w-full bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-secondary transition-colors mb-6"
+        class="w-full bg-primary text-primary-foreground py-3 rounded-lg font-medium hover:bg-app-primary transition-colors mb-6"
         on:click={login}
       >
         Log In

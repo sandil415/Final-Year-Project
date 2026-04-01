@@ -35,7 +35,7 @@
 
   onMount(async () => {
     currentUser = pb.authStore.record ?? pb.authStore.model;
-
+    
     // Posts fetch
     try {
       const result = await pb.collection('posts').getList(1, 5, {
@@ -64,7 +64,7 @@
       }).addTo(map);
 
       if (isUserLocation) {
-        console.log("HELLLOOOO");
+        // console.log("HELLLOOOO");
         const userIcon = L.divIcon({
           className: 'custom-marker',
           html: `
@@ -295,6 +295,14 @@
       {/each}
     </div>
   </section>
+
+
+  <!-- Debug Step -->
+  <!-- <div>
+    <button on:click={() => console.log(currentUser)}>
+  HELLO
+</button>
+  </div> -->
 
   <!-- Map Section -->
   <section class="max-w-7xl mx-auto px-6 py-16">
