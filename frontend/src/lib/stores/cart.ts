@@ -5,12 +5,36 @@ const STORAGE_KEY = 'fiestra-cart';
 
 export type CartItemRecord = any; // PocketBase menuItems record shape
 
+// ── Modifier types ─────────────────────────────────────────────────────────────
+export type ModifierOption = {
+  id: string;
+  name: string;
+  price: number; // delta, can be negative
+};
+
+export type Modifier = {
+  id: string;
+  label: string;
+  type: 'radio' | 'multi'; // radio = pick one, multi = pick any
+  required: boolean;
+  options: ModifierOption[];
+};
+
+// Resolved selection per modifier group: radio → single optionId | multi → optionId[]
+export type ModifierSelection = Record<string, string | string[]>;
+
 export type CartEntry = {
   item: CartItemRecord;
   quantity: number;
+  // Modifier selections for this line item (keyed by modifier.id)
+  selections?: ModifierSelection;
+  // Effective per-unit price after applying modifier deltas
+  effectivePrice?: number;
+  // Human-readable summary of selected modifiers for display
+  selectionLabel?: string;
 };
 
-// Keyed by itemId → CartEntry
+// Keyed by a unique cart line key (itemId + selection fingerprint) → CartEntry
 export type CartState = Record<string, CartEntry>;
 
 // Per-seller checkout state
@@ -32,7 +56,63 @@ export type SellerGroup = {
   subtotal: number;
 };
 
-// Main Cart Store
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Build a stable cart-line key from itemId + selections so two different
+ *  modifier combos for the same item occupy separate lines. */
+export function buildLineKey(itemId: string, selections: ModifierSelection = {}): string {
+  const fingerprint = Object.entries(selections)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}:${Array.isArray(v) ? v.slice().sort().join('+') : v}`)
+    .join('|');
+  return fingerprint ? `${itemId}__${fingerprint}` : itemId;
+}
+
+/** Compute the effective per-unit price given base price + modifier selections. */
+export function computeEffectivePrice(
+  basePrice: number,
+  modifiers: Modifier[] = [],
+  selections: ModifierSelection = {}
+): number {
+  let total = basePrice;
+  for (const mod of modifiers) {
+    const sel = selections[mod.id];
+    if (mod.type === 'radio' && typeof sel === 'string') {
+      const opt = mod.options.find((o) => o.id === sel);
+      if (opt) total += opt.price;
+    } else if (mod.type === 'multi' && Array.isArray(sel)) {
+      for (const sid of sel) {
+        const opt = mod.options.find((o) => o.id === sid);
+        if (opt) total += opt.price;
+      }
+    }
+  }
+  return Math.max(0, total);
+}
+
+/** Build a readable summary string like "Pork · Extra achar, Cheese" */
+export function buildSelectionLabel(
+  modifiers: Modifier[] = [],
+  selections: ModifierSelection = {}
+): string {
+  const parts: string[] = [];
+  for (const mod of modifiers) {
+    const sel = selections[mod.id];
+    if (!sel) continue;
+    if (mod.type === 'radio' && typeof sel === 'string') {
+      const opt = mod.options.find((o) => o.id === sel);
+      if (opt) parts.push(opt.name);
+    } else if (mod.type === 'multi' && Array.isArray(sel) && sel.length > 0) {
+      const names = sel
+        .map((sid) => mod.options.find((o) => o.id === sid)?.name)
+        .filter(Boolean) as string[];
+      if (names.length) parts.push(names.join(', '));
+    }
+  }
+  return parts.join(' · ');
+}
+
+// ── Main Cart Store ────────────────────────────────────────────────────────────
 const initialCart: CartState = browser
   ? (() => {
       try {
@@ -51,19 +131,17 @@ cart.subscribe((value) => {
   }
 });
 
-// ─── Per-seller checkout state (address, notes, placing, success) ──────────────
-// Keyed by sellerId
+// ── Per-seller checkout state ──────────────────────────────────────────────────
 export const checkoutState = writable<Record<string, SellerCheckout>>({});
 
-// ─── Seller info cache ─────────────────────────────────────────────────────────
-// Populated externally when a menu is loaded. Keyed by sellerId → user record.
+// ── Seller info cache ──────────────────────────────────────────────────────────
 export const sellerCache = writable<Record<string, any>>({});
 
 export function cacheSellerRecord(record: any) {
   sellerCache.update((s) => ({ ...s, [record.id]: record }));
 }
 
-// Derived stores 
+// ── Derived stores ─────────────────────────────────────────────────────────────
 export const cartItems = derived(cart, ($cart) => Object.values($cart));
 
 export const cartCount = derived(cartItems, ($items) =>
@@ -71,10 +149,9 @@ export const cartCount = derived(cartItems, ($items) =>
 );
 
 export const cartTotal = derived(cartItems, ($items) =>
-  $items.reduce((sum, e) => sum + (e.item?.price || 0) * e.quantity, 0)
+  $items.reduce((sum, e) => sum + (e.effectivePrice ?? e.item?.price ?? 0) * e.quantity, 0)
 );
 
-// Grouped by seller — merges sellerCache for display info
 export const cartBySeller = derived(
   [cart, sellerCache],
   ([$cart, $sellerCache]): SellerGroup[] => {
@@ -96,41 +173,65 @@ export const cartBySeller = derived(
       }
 
       groups[sid].entries.push(entry);
-      groups[sid].subtotal += (entry.item?.price || 0) * entry.quantity;
+      groups[sid].subtotal +=
+        (entry.effectivePrice ?? entry.item?.price ?? 0) * entry.quantity;
     }
 
     return Object.values(groups);
   }
 );
 
-// Cart mutation helpers 
-export function addItem(item: CartItemRecord, quantity = 1) {
+// ── Cart mutation helpers ──────────────────────────────────────────────────────
+
+/**
+ * Add an item with optional modifier selections.
+ * Items with different modifier combos get separate cart lines.
+ */
+export function addItem(
+  item: CartItemRecord,
+  quantity = 1,
+  selections: ModifierSelection = {},
+  modifiers: Modifier[] = []
+) {
+  const lineKey = buildLineKey(item.id, selections);
+  const effectivePrice = computeEffectivePrice(item.price ?? 0, modifiers, selections);
+  const selectionLabel = buildSelectionLabel(modifiers, selections);
+
   cart.update((current) => {
-    const existing = current[item.id];
+    const existing = current[lineKey];
     const nextQty = (existing?.quantity || 0) + quantity;
-    return { ...current, [item.id]: { item, quantity: nextQty } };
+    return {
+      ...current,
+      [lineKey]: {
+        item,
+        quantity: nextQty,
+        selections,
+        effectivePrice,
+        selectionLabel: selectionLabel || undefined,
+      },
+    };
   });
 }
 
-export function removeItem(itemId: string, quantity = 1) {
-  if (!itemId) return;
+export function removeItem(lineKey: string, quantity = 1) {
+  if (!lineKey) return;
   cart.update((current) => {
-    const existing = current[itemId];
+    const existing = current[lineKey];
     if (!existing) return current;
     const nextQty = existing.quantity - quantity;
     if (nextQty <= 0) {
-      const { [itemId]: _removed, ...rest } = current;
+      const { [lineKey]: _removed, ...rest } = current;
       return rest;
     }
-    return { ...current, [itemId]: { ...existing, quantity: nextQty } };
+    return { ...current, [lineKey]: { ...existing, quantity: nextQty } };
   });
 }
 
 export function removeSellerItems(sellerId: string) {
   cart.update((current) => {
     const next: CartState = {};
-    for (const [id, entry] of Object.entries(current)) {
-      if (entry.item?.seller !== sellerId) next[id] = entry;
+    for (const [key, entry] of Object.entries(current)) {
+      if (entry.item?.seller !== sellerId) next[key] = entry;
     }
     return next;
   });
@@ -145,7 +246,7 @@ export function clearCart() {
   checkoutState.set({});
 }
 
-// Checkout state helpers 
+// ── Checkout state helpers ─────────────────────────────────────────────────────
 const defaultCheckout = (): SellerCheckout => ({
   address: '',
   lat: null,

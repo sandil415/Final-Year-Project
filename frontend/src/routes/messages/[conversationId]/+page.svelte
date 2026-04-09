@@ -6,7 +6,7 @@
   import { goto } from '$app/navigation';
   import { notifyMessage } from '$lib/notifications';
   import Header from '$lib/components/Header.svelte';
-  import { ArrowLeft } from 'lucide-svelte';
+  import { ArrowLeftIcon, ChatIcon, ChatTeardropIcon, PaperPlaneRightIcon } from 'phosphor-svelte';
 
   let messages = [], conversation = null, currentUser = null;
   let otherUser = null, loading = true, messageInput = '';
@@ -156,7 +156,7 @@
         class="p-2 hover:bg-muted rounded-full transition-colors flex-shrink-0"
         aria-label="Go back"
       >
-        <ArrowLeft class="w-5 h-5 text-foreground" />
+        <ArrowLeftIcon class="w-5 h-5 text-foreground" />
       </button>
 
       {#if loading}
@@ -176,7 +176,7 @@
         />
         <div class="flex-1 min-w-0">
           <h2 class="font-semibold text-sm text-foreground truncate">{otherUser.username}</h2>
-          <p class="text-xs text-muted-foreground">Active now</p>
+          <!-- <p class="text-xs text-activeColor">Active now</p> -->
         </div>
       {/if}
     </div>
@@ -188,7 +188,7 @@
     >
       {#if messages.length === 0 && !loading}
         <div class="flex flex-col items-center justify-center h-full text-center py-16">
-          <div class="w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-3 text-2xl">💬</div>
+          <div class="w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-3 text-2xl"><ChatTeardropIcon/></div>
           <p class="font-semibold text-sm text-foreground mb-1">No messages yet</p>
           <p class="text-xs text-muted-foreground">Say hello to {otherUser?.username || 'them'}!</p>
         </div>
@@ -271,10 +271,8 @@
         style="background-color: #FF6B35;"
         aria-label="Send message"
       >
-        <!-- Send icon (inline SVG — no extra import needed) -->
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 translate-x-0.5">
-          <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
-        </svg>
+      
+      <PaperPlaneRightIcon size={20} weight="fill" color="white" />
       </button>
     </div>
 

@@ -5,6 +5,7 @@
   import { CameraIcon, ArrowLeftIcon } from "phosphor-svelte";
   import Header from '$lib/components/Header.svelte';
 
+
   let user = null;
   let selectedFile = null;
   let previewUrl = null;
@@ -230,7 +231,7 @@
   <main class="flex-1 overflow-y-auto">
     <div class="max-w-4xl mx-auto p-6">
       <div class="flex mb-8 gap-4 items-center">
-        <button on:click={() => goto('/demo')} class="p-2 hover:bg-muted rounded-lg transition-colors">
+        <button on:click={() => window.history.back} class="p-2 hover:bg-muted rounded-lg transition-colors">
           <ArrowLeftIcon />
         </button>
         <h1 class="text-2xl font-semibold">Create new post</h1>

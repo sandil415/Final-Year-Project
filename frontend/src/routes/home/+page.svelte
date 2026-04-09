@@ -211,7 +211,7 @@
     <button
       class="text-sm font-semibold hover:opacity-70"
       style="color: #FF6B35;"
-      on:click={() => goto('/home')}
+      on:click={() => goto('/search')}
     >
       See all →
     </button>

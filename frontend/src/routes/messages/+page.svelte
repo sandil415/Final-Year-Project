@@ -5,14 +5,17 @@
   import { goto } from '$app/navigation';
   import Header from '$lib/components/Header.svelte';
   import BottomNav from '$lib/components/BottomNav.svelte';
-  import { ArrowLeft, MessageCircle } from 'lucide-svelte';
+  import { ArrowLeft, MessageCircle, X } from 'lucide-svelte';
+  import { TrashSimple } from 'phosphor-svelte';
 
   let conversations = [], currentUser, notifications = [];
   let loading = true;
+  let confirmDeleteId = null;
+  let deleting = false;
 
   onMount(async () => {
     requireAuth();
-    currentUser = pb.authStore.model;
+    currentUser = pb.authStore.record ?? pb.authStore.model;
 
     const [convRes, notifRes] = await Promise.all([
       pb.collection('conversations').getList(1, 50, {
@@ -20,7 +23,9 @@
         sort: '-lastMessageTime',
         expand: 'participants'
       }),
-      pb.collection('notifications').getList(1, 100)
+      pb.collection('notifications').getList(1, 100, {
+        filter: `user = "${currentUser.id}" && type = "message" && read = false`
+      })
     ]);
 
     conversations = convRes.items;
@@ -45,6 +50,21 @@
     else goto('/home');
   }
 
+  async function deleteConversation() {
+    if (!confirmDeleteId || deleting) return;
+    deleting = true;
+
+    try {
+      await pb.collection('conversations').delete(confirmDeleteId);
+      conversations = conversations.filter(c => c.id !== confirmDeleteId);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      deleting = false;
+      confirmDeleteId = null;
+    }
+  }
+
   function formatTime(dateString) {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -57,110 +77,123 @@
   }
 </script>
 
+<!-- Delete Modal -->
+{#if confirmDeleteId}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" on:click={() => confirmDeleteId = null}></div>
+
+    <div class="relative z-10 bg-background border border-border rounded-2xl p-6 max-w-xs w-full shadow-2xl">
+      <button class="absolute top-4 right-4 p-1 hover:bg-muted rounded-full" on:click={() => confirmDeleteId = null}>
+        <X class="w-4 h-4 text-muted-foreground" />
+      </button>
+
+      <div class="flex flex-col items-center text-center gap-3">
+        <div class="w-12 h-12 rounded-full bg-red-100 dark:bg-red-950/30 flex items-center justify-center">
+          <TrashSimple size={22} weight="fill" color="#EF4444" />
+        </div>
+
+        <div>
+          <h3 class="font-bold mb-1">Delete conversation?</h3>
+          <p class="text-sm text-muted-foreground">
+            This removes it from your inbox. The other person's copy is unaffected.
+          </p>
+        </div>
+
+        <div class="flex gap-2 w-full">
+          <button class="flex-1 py-2 rounded-xl border border-border" on:click={() => confirmDeleteId = null}>
+            Cancel
+          </button>
+          <button class="flex-1 py-2 rounded-xl bg-red-500 text-white" on:click={deleteConversation}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
   <Header />
 
   <main class="flex-1 flex flex-col overflow-hidden">
+    
+    <!-- ✅ FIXED CONTAINER -->
+    <div class="max-w-7xl mx-auto w-full px-6 flex flex-col flex-1 overflow-hidden">
 
-    <!-- ── Page Header ─────────────────────────────────────────── -->
-    <div class="flex-shrink-0 border-b border-border px-4 py-3 flex items-center gap-3">
-      <button
-        on:click={goBack}
-        class="p-2 hover:bg-muted rounded-full transition-colors flex-shrink-0"
-        aria-label="Go back"
-      >
-        <ArrowLeft class="w-5 h-5 text-foreground" />
-      </button>
-      <h1 class="text-lg font-bold text-foreground">Messages</h1>
-    </div>
+      <!-- Top bar -->
+      <div class="flex-shrink-0 border-b border-border py-3 flex items-center gap-3">
+        <button on:click={goBack} class="p-2 hover:bg-muted rounded-full">
+          <ArrowLeft class="w-5 h-5" />
+        </button>
+        <h1 class="text-lg font-bold">Messages</h1>
+      </div>
 
-    <!-- ── Conversation List ───────────────────────────────────── -->
-    <div class="flex-1 overflow-y-auto pb-20 md:pb-0">
+      <!-- Content -->
+      <div class="flex-1 overflow-y-auto pb-20 md:pb-0">
 
-      {#if loading}
-        <!-- Skeleton -->
-        {#each Array(5) as _}
-          <div class="flex items-center gap-4 px-6 py-4 border-b border-border/50">
-            <div class="w-12 h-12 rounded-full bg-muted animate-pulse flex-shrink-0"></div>
-            <div class="flex-1 space-y-2">
-              <div class="h-3.5 w-32 rounded bg-muted animate-pulse"></div>
-              <div class="h-3 w-48 rounded bg-muted animate-pulse"></div>
+        {#if loading}
+          {#each Array(5) as _}
+            <div class="flex items-center gap-4 py-4 border-b border-border/50">
+              <div class="w-12 h-12 rounded-full bg-muted animate-pulse"></div>
+              <div class="flex-1 space-y-2">
+                <div class="h-3.5 w-32 bg-muted animate-pulse"></div>
+                <div class="h-3 w-48 bg-muted animate-pulse"></div>
+              </div>
+              <div class="h-3 w-10 bg-muted animate-pulse"></div>
             </div>
-            <div class="h-3 w-10 rounded bg-muted animate-pulse"></div>
+          {/each}
+
+        {:else if conversations.length === 0}
+          <div class="flex flex-col items-center justify-center h-full text-center">
+            <MessageCircle class="w-7 h-7 text-muted-foreground mb-2" />
+            <p class="font-semibold">No messages yet</p>
+            <p class="text-sm text-muted-foreground">Start a conversation.</p>
           </div>
-        {/each}
 
-      {:else if conversations.length === 0}
-        <!-- Empty state -->
-        <div class="flex flex-col items-center justify-center h-full py-24 text-center px-8">
-          <div class="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-            <MessageCircle class="w-7 h-7 text-muted-foreground" />
-          </div>
-          <p class="font-semibold text-foreground mb-1">No messages yet</p>
-          <p class="text-sm text-muted-foreground">
-            Visit someone's profile and hit Message to start a conversation.
-          </p>
-        </div>
+        {:else}
+          {#each conversations as convo (convo.id)}
+            {@const other = getOtherUser(convo)}
+            {@const unread = unreadCount(convo)}
 
-      {:else}
-        {#each conversations as convo (convo.id)}
-          {@const other = getOtherUser(convo)}
-          {@const unread = unreadCount(convo)}
-          {#if other}
-            <button
-              class="w-full flex items-center gap-4 px-6 py-4 hover:bg-muted/50 transition-colors
-                     border-b border-border/40 text-left {unread > 0 ? 'bg-muted/20' : ''}"
-              on:click={() => openConversation(convo)}
-            >
-              <!-- Avatar -->
-              <div class="relative flex-shrink-0">
-                <img
-                  src={other.avatar
-                    ? pb.files.getUrl(other, other.avatar)
-                    : '/images/profilePlaceholder.jpg'}
-                  alt={other.username}
-                  class="w-12 h-12 rounded-full object-cover"
-                />
-                <!-- Unread dot on avatar -->
-                {#if unread > 0}
-                  <span
-                    class="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-background"
-                    style="background-color: #FF6B35;"
-                  ></span>
-                {/if}
+            {#if other}
+              <div class="flex border-b border-border/40">
+
+                <button
+                  class="flex-1 flex items-center gap-4 py-4 hover:bg-muted/50 text-left"
+                  on:click={() => openConversation(convo)}
+                >
+                  <img
+                    src={other.avatar
+                      ? pb.files.getUrl(other, other.avatar)
+                      : '/images/profilePlaceholder.jpg'}
+                    class="w-12 h-12 rounded-full object-cover"
+                  />
+
+                  <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-sm truncate">{other.username}</p>
+                    <p class="text-sm truncate {unread > 0 ? 'font-medium' : 'text-muted-foreground'}">
+                      {convo.lastMessage || 'Start a conversation'}
+                    </p>
+                  </div>
+
+                  <div class="text-xs text-muted-foreground">
+                    {formatTime(convo.lastMessageTime)}
+                  </div>
+                </button>
+
+                <button
+                  class="w-14 flex items-center justify-center hover:bg-red-50"
+                  on:click|stopPropagation={() => confirmDeleteId = convo.id}
+                >
+                  <TrashSimple size={18} color="#EF4444" />
+                </button>
+
               </div>
+            {/if}
+          {/each}
+        {/if}
 
-              <!-- Name + last message -->
-              <div class="flex-1 min-w-0 text-left">
-                <p class="font-semibold text-sm text-foreground truncate leading-snug">
-                  {other.username}
-                </p>
-                <p class="text-sm text-muted-foreground truncate leading-snug mt-0.5
-                           {unread > 0 ? 'font-medium text-foreground' : ''}">
-                  {convo.lastMessage || 'Start a conversation'}
-                </p>
-              </div>
-
-              <!-- Timestamp + unread badge -->
-              <div class="flex flex-col items-end gap-1.5 flex-shrink-0">
-                <span class="text-xs text-muted-foreground whitespace-nowrap">
-                  {formatTime(convo.lastMessageTime)}
-                </span>
-                {#if unread > 0}
-                  <span
-                    class="min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                    style="background-color: #FF6B35;"
-                  >
-                    {unread}
-                  </span>
-                {/if}
-              </div>
-
-            </button>
-          {/if}
-        {/each}
-      {/if}
-
+      </div>
     </div>
   </main>
 </div>
