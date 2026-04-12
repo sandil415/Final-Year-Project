@@ -45,8 +45,8 @@
           filter: `image != ""`,
           expand: 'user',
         }),
-        pb.collection('follows').getFullList({ filter: `follower="${currentUser.id}"`, fields: 'following' }).catch(() => []),
-        pb.collection('follows').getFullList({ filter: `following="${currentUser.id}"`, fields: 'follower' }).catch(() => []),
+        pb.collection('follows').getFullList({ filter: `follower = "${currentUser.id}"`, fields: 'following' }).catch(() => []),
+        pb.collection('follows').getFullList({ filter: `following = "${currentUser.id}"`, fields: 'follower' }).catch(() => []),
       ]);
 
       const followingIds = new Set(followingRaw.map(f => f.following));
@@ -67,24 +67,44 @@
         .sort((a, b) => b._score - a._score)
         .slice(0, 20);
 
-      const withStats = await Promise.all(
-        candidates.map(async (post) => {
-          try {
-            const [lr, cr] = await Promise.all([
-              pb.collection('likes').getList(1, 1, { filter: `post="${post.id}"` }),
-              pb.collection('comments').getList(1, 1, { filter: `post="${post.id}"` }),
-            ]);
-            return {
-              ...post,
-              _likes: lr.totalItems,
-              _comments: cr.totalItems,
-              _score: post._score + lr.totalItems * 3 + cr.totalItems * 2,
-            };
-          } catch { return post; }
-        })
-      );
+      if (candidates.length === 0) {
+        explorePosts = [];
+        return;
+      }
+
+      // ── FIX: Batch fetch all likes + comments in just 2 requests ──────────────
+      // Build one filter string covering all candidate post IDs
+      const idList = candidates.map(p => `post = "${p.id}"`).join(' || ');
+
+      const [allLikes, allComments] = await Promise.all([
+        pb.collection('likes').getFullList({ filter: idList, fields: 'post' }),
+        pb.collection('comments').getFullList({ filter: idList, fields: 'post' }),
+      ]);
+
+      // Count per post id using Maps
+      const likeCountMap = new Map();
+      const commentCountMap = new Map();
+
+      for (const like of allLikes) {
+        likeCountMap.set(like.post, (likeCountMap.get(like.post) ?? 0) + 1);
+      }
+      for (const comment of allComments) {
+        commentCountMap.set(comment.post, (commentCountMap.get(comment.post) ?? 0) + 1);
+      }
+
+      const withStats = candidates.map(post => {
+        const likes    = likeCountMap.get(post.id) ?? 0;
+        const comments = commentCountMap.get(post.id) ?? 0;
+        return {
+          ...post,
+          _likes: likes,
+          _comments: comments,
+          _score: post._score + likes * 3 + comments * 2,
+        };
+      });
 
       explorePosts = withStats.sort((a, b) => b._score - a._score).slice(0, 20);
+
     } catch (err) {
       console.error('Failed to load explore posts:', err);
       explorePosts = [];
@@ -93,7 +113,16 @@
     }
   }
 
-  // Debounced search — fires 350ms after the user stops typing
+  // ── Called by PostModal when a like is toggled ─────────────────────────────
+  // delta: +1 when liked, -1 when unliked
+  function onLikeToggled(postId, delta) {
+    explorePosts = explorePosts.map(p =>
+      p.id === postId
+        ? { ...p, _likes: Math.max(0, (p._likes ?? 0) + delta) }
+        : p
+    );
+  }
+
   function onQueryInput() {
     clearTimeout(debounceTimer);
     searchError = '';
@@ -107,13 +136,9 @@
   }
 
   async function doSearch(q) {
-    // Escape any characters that could break the PocketBase filter string
     const safe = q.replace(/['"\\]/g, '');
     if (!safe) { loading = false; return; }
-
     try {
-      // PocketBase filter: use ~ for "contains" on text fields.
-      // We try both username and businessName for users; name/description for menu.
       const [usersRes, menuRes, recipesRes] = await Promise.all([
         pb.collection('users').getList(1, 10, {
           filter: `username ~ "${safe}" || businessName ~ "${safe}"`,
@@ -146,7 +171,6 @@
   }
 
   function openPost(postId) { selectedPostId = postId; }
-  function closePost() { selectedPostId = null; loadExplorePosts(); }
 
   $: isSearching = query.trim().length > 0;
   $: hasResults = userResults.length > 0 || menuResults.length > 0 || recipeResults.length > 0;
@@ -158,7 +182,6 @@
   <main class="flex-1">
     <div class="max-w-2xl mx-auto px-4 py-6">
 
-      <!-- Search bar -->
       <div class="flex items-center gap-3 mb-6">
         <button class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl hover:bg-muted transition-colors" on:click={goBack}>
           <ArrowLeftIcon size={20} weight="bold"/>
@@ -180,14 +203,12 @@
         </div>
       </div>
 
-      <!-- ── SEARCH RESULTS ── -->
       {#if isSearching}
 
         {#if searchError}
           <p class="text-sm text-red-500 mb-4">{searchError}</p>
         {/if}
 
-        <!-- People & Restaurants -->
         {#if userResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">People & Restaurants</p>
@@ -221,7 +242,6 @@
           </div>
         {/if}
 
-        <!-- Dishes & Menu Items -->
         {#if menuResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Dishes & Menu Items</p>
@@ -252,7 +272,6 @@
           </div>
         {/if}
 
-        <!-- Recipes -->
         {#if recipeResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Recipes</p>
@@ -295,7 +314,6 @@
           </div>
         {/if}
 
-      <!-- ── EXPLORE GRID ── -->
       {:else}
         <div class="flex items-center gap-2 mb-4">
           <h2 class="font-bold text-sm">Explore</h2>
@@ -316,7 +334,7 @@
 
         {:else}
           <div class="explore-grid">
-            {#each explorePosts as post, i}
+            {#each explorePosts as post, i (post.id)}
               {@const isFeatured = i % 7 === 0}
               <button
                 class="explore-cell {isFeatured ? 'featured' : ''} relative overflow-hidden rounded-2xl group bg-muted"
@@ -330,8 +348,12 @@
                 />
                 <div class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 explore-overlay flex flex-col justify-end p-2.5">
                   <div class="flex items-center gap-3 mb-1.5">
-                    <span class="flex items-center gap-1 text-white text-xs font-semibold"><HeartIcon size={13} weight="fill"/>{post._likes}</span>
-                    <span class="flex items-center gap-1 text-white text-xs font-semibold"><ChatCircleIcon size={13} weight="fill"/>{post._comments}</span>
+                    <span class="flex items-center gap-1 text-white text-xs font-semibold">
+                      <HeartIcon size={13} weight="fill"/>{post._likes ?? 0}
+                    </span>
+                    <span class="flex items-center gap-1 text-white text-xs font-semibold">
+                      <ChatCircleIcon size={13} weight="fill"/>{post._comments ?? 0}
+                    </span>
                   </div>
                   <div class="flex items-center gap-1.5">
                     <img
@@ -358,7 +380,14 @@
 </div>
 
 {#if selectedPostId}
-  <PostModal postId={selectedPostId} onClose={closePost} onDelete={() => { selectedPostId = null; loadExplorePosts(); }}/>
+  <PostModal
+    postId={selectedPostId}
+    posts={explorePosts}
+    initialIndex={explorePosts.findIndex(p => p.id === selectedPostId)}
+    onClose={() => { selectedPostId = null; }}
+    onDelete={() => { selectedPostId = null; loadExplorePosts(); }}
+    onLikeToggled={onLikeToggled}
+  />
 {/if}
 
 <style>

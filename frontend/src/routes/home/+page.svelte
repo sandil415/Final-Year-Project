@@ -4,6 +4,7 @@
   import 'leaflet/dist/leaflet.css';
   import Header from '$lib/components/Header.svelte';
   import FloatingImage from '$lib/components/FloatingImage.svelte';
+  import RecommendedFeed from '$lib/components/RecommendedFeed.svelte';
   import { goto } from '$app/navigation';
   import { ArrowRightIcon, MagnifyingGlassIcon, StarIcon, CookingPotIcon } from 'phosphor-svelte';
   import pb from '$lib/pocketbase';
@@ -24,11 +25,7 @@
     { id: 5, name: "Sweets Shops",    lat: 27.7250, lng: 85.3400, type: "Bakery",       cuisine: "Desserts" }
   ];
 
-  const featuredDishes = [
-    { id: 1, name: "Momo Platter",     price: "250", rating: 4.8, seller: "Thamel Momo Corner" },
-    { id: 2, name: "Dal Bhat Set",     price: "350", rating: 4.9, seller: "Dal Bhat House"      },
-    { id: 3, name: "Newari Khaja Set", price: "450", rating: 4.7, seller: "Newari Kitchen"      }
-  ];
+  
 
   let searchQuery = '';
   let activeCategory = 'all';
@@ -272,29 +269,9 @@
       </button>
     </div>
     
-    <div class="grid md:grid-cols-3 gap-6">
-      {#each featuredDishes as dish}
-        <div class="dish-card bg-background border-2 border-border rounded-3xl overflow-hidden hover:border-orange hover:shadow-2xl transition-all duration-300 group">
-          <div class="p-8 text-center bg-secondary/30">
-            <div class="text-7xl">{dish.image}</div>
-          </div>
-          <div class="p-6 space-y-3">
-            <div>
-              <h4 class="font-bold text-xl mb-1">{dish.name}</h4>
-              <p class="text-sm text-muted-foreground">{dish.seller}</p>
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="price-tag text-2xl font-bold">Rs. {dish.price}</span>
-              <span class="flex gap-3 justify-center text-sm font-semibold text-muted-foreground"> <StarIcon/>{dish.rating}</span>
-            </div>
-            <button class="add-to-cart w-full py-3 rounded-xl font-bold hover:scale-105 transition-all">
-              Add to Cart
-            </button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  </section>
+    <section class="max-w-7xl mx-auto px-6 py-16">
+      <RecommendedFeed userId={currentUser?.id} />
+    </section>
 
 
   <!-- Debug Step -->

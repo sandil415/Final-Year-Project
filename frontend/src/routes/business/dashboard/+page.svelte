@@ -1,41 +1,66 @@
 <script>
   import pb from '$lib/pocketbase';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import Header from '$lib/components/Header.svelte';
-  import { ShoppingBag, BookOpen, TrendingUp, Clock, CheckCircle, XCircle, ChefHat } from 'lucide-svelte';
+  import {
+    CookingPotIcon,
+    BookOpenIcon,
+    ClockIcon,
+    CheckCircleIcon,
+    ShoppingBagIcon,
+    XCircleIcon,
+    ArrowRightIcon,
+    ChartBarIcon,
+    WarningIcon,
+  } from 'phosphor-svelte';
 
   let user = null;
   let orders = [];
   let menuCount = 0;
   let loading = true;
   let activeTab = 'pending';
+  let updatingOrderId = null;
+  let toast = null;
+  let unsubscribe = null;
 
-  // Graph state
-  let graphRange = '7'; // '7' | '14' | '30'
+  const tabs = [
+    { key: 'pending',   label: 'Pending'   },
+    { key: 'confirmed', label: 'Confirmed' },
+    { key: 'preparing', label: 'Preparing' },
+    { key: 'ready',     label: 'Ready'     },
+    { key: 'delivered', label: 'Delivered' },
+    { key: 'cancelled', label: 'Cancelled' },
+  ];
 
-  const tabs = ['pending', 'confirmed', 'preparing', 'ready', 'delivered'];
-  const statusColors = {
-    pending:   'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
-    confirmed: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-    preparing: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-    ready:     'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-    delivered: 'bg-muted text-muted-foreground',
-    cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  const statusStyle = {
+    pending:   { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
+    confirmed: { bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
+    preparing: { bg: '#EDE9FE', text: '#5B21B6', dot: '#8B5CF6' },
+    ready:     { bg: '#D1FAE5', text: '#065F46', dot: '#10B981' },
+    delivered: { bg: '#F3F4F6', text: '#6B7280', dot: '#9CA3AF' },
+    cancelled: { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
   };
+
   const nextStatus = {
-    pending: 'confirmed',
+    pending:   'confirmed',
     confirmed: 'preparing',
     preparing: 'ready',
-    ready: 'delivered',
+    ready:     'delivered',
   };
-  const nextStatusLabel = {
-    pending: 'Confirm Order',
-    confirmed: 'Start Preparing',
+
+  const nextLabel = {
+    pending:   'Confirm',
+    confirmed: 'Preparing',
     preparing: 'Mark Ready',
-    ready: 'Mark Delivered',
+    ready:     'Delivered',
   };
+
+  function showToast(msg, type = 'success') {
+    toast = { msg, type };
+    setTimeout(() => toast = null, 3000);
+  }
 
   onMount(async () => {
     requireAuth();
@@ -44,9 +69,13 @@
     await Promise.all([loadOrders(), loadMenuCount()]);
     loading = false;
 
-    pb.collection('orders').subscribe('*', async (e) => {
+    unsubscribe = await pb.collection('orders').subscribe('*', async (e) => {
       if (e.record.seller === user.id) await loadOrders();
     });
+  });
+
+  onDestroy(() => {
+    unsubscribe?.();
   });
 
   async function loadOrders() {
@@ -72,13 +101,18 @@
   }
 
   async function updateOrderStatus(order, status) {
+    updatingOrderId = order.id;
     try {
       await pb.collection('orders').update(order.id, { status });
       orders = orders.map(o => o.id === order.id ? { ...o, status } : o);
+      showToast(`Order marked as ${status}`);
     } catch (e) {
       console.error('Order update failed:', e);
-      return;
+      showToast('Failed to update order', 'error');
+    } finally {
+      updatingOrderId = null;
     }
+
     try {
       await pb.collection('notifications').create({
         user: order.expand?.buyer?.id || order.buyer,
@@ -87,9 +121,7 @@
         message: `Your order from ${user.businessName} is now ${status}.`,
         read: false
       });
-    } catch (notifErr) {
-      console.error('Notification failed:', notifErr?.response?.data);
-    }
+    } catch (_) {}
   }
 
   async function cancelOrder(order) {
@@ -97,314 +129,320 @@
   }
 
   $: filteredOrders = orders.filter(o => o.status === activeTab);
-  $: pendingCount = orders.filter(o => o.status === 'pending').length;
+  $: pendingCount   = orders.filter(o => o.status === 'pending').length;
+  $: tabCounts      = tabs.reduce((acc, t) => {
+    acc[t.key] = orders.filter(o => o.status === t.key).length;
+    return acc;
+  }, {});
 
-  // ── Income graph ──────────────────────────────────────────────
-  // Build daily income buckets from delivered orders only
-  $: incomeData = (() => {
-    const days = parseInt(graphRange);
-    const buckets = {};
+  $: todayDelivered = orders.filter(o =>
+    o.status === 'delivered' &&
+    new Date(o.created).toDateString() === new Date().toDateString()
+  ).length;
 
-    // Pre-fill every day in range with 0 so gaps show
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      buckets[d.toLocaleDateString('en-CA')] = 0; // YYYY-MM-DD key
-    }
+  $: todayRevenue = orders
+    .filter(o => o.status === 'delivered' && new Date(o.created).toDateString() === new Date().toDateString())
+    .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
 
-    // Sum delivered orders into their day bucket
-    for (const order of orders) {
-      if (order.status !== 'delivered') continue;
-      const key = new Date(order.created).toLocaleDateString('en-CA');
-      if (key in buckets) {
-        buckets[key] = (buckets[key] || 0) + (order.totalAmount || 0);
-      }
-    }
-
-    return Object.entries(buckets).map(([date, amount]) => ({
-      date,
-      label: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      amount,
-    }));
-  })();
-
-  $: maxIncome = Math.max(...incomeData.map(d => d.amount), 1);
-  $: totalIncome = incomeData.reduce((s, d) => s + d.amount, 0);
-  $: avgIncome = incomeData.length ? totalIncome / incomeData.length : 0;
-
-  // Tooltip state
-  let hoveredBar = null;
-  let tooltipX = 0;
-  let tooltipY = 0;
-
-  function onBarEnter(e, bar) {
-    hoveredBar = bar;
-    tooltipX = e.clientX;
-    tooltipY = e.clientY;
-  }
-  function onBarLeave() { hoveredBar = null; }
-  function onBarMove(e) {
-    if (hoveredBar) { tooltipX = e.clientX; tooltipY = e.clientY; }
+  function formatTime(d) {
+    return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  function formatTime(dateString) {
-    return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  function formatDate(d) {
+    const date = new Date(d);
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
-  function formatDate(dateString) {
-    return new Date(dateString).toLocaleDateString();
+
+  function itemsSummary(items) {
+    if (!items?.length) return '—';
+    return items.map(i => `${i.quantity}× ${i.name}`).join(', ');
   }
 </script>
 
-<!-- Tooltip (portal-style, fixed) -->
-{#if hoveredBar}
+<!-- Global toast -->
+{#if toast}
   <div
-    class="fixed z-50 pointer-events-none px-3 py-2 rounded-lg text-xs font-semibold text-white shadow-xl"
-    style="left: {tooltipX + 12}px; top: {tooltipY - 40}px; background-color: #FF6B35;"
+    class="fixed top-5 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-5 py-3 rounded-xl shadow-xl text-sm font-semibold text-white pointer-events-none"
+    style={toast.type === 'error' ? 'background:#EF4444;' : 'background:#16a34a;'}
   >
-    <div>{hoveredBar.label}</div>
-    <div>Rs. {hoveredBar.amount.toFixed(2)}</div>
+    {#if toast.type === 'error'}
+      <WarningIcon size={16} weight="fill" />
+    {:else}
+      <CheckCircleIcon size={16} weight="fill" />
+    {/if}
+    {toast.msg}
   </div>
 {/if}
 
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
   <Header />
-  <main class="flex-1 overflow-y-auto">
-    <div class="max-w-5xl mx-auto p-6">
 
-      <!-- Header -->
-      <div class="flex items-center justify-between mb-8">
+  <main class="flex-1 overflow-y-auto">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+
+      <!-- ── PAGE HEADER ── -->
+      <div class="flex items-center justify-between">
         <div>
-          <div class="flex items-center gap-2 mb-1">
-            <ChefHat class="w-5 h-5" style="color: #FF6B35;" />
-            <span class="text-sm font-medium text-muted-foreground">Business Dashboard</span>
+          <div class="flex items-center gap-2 mb-0.5">
+            <CookingPotIcon size={16} weight="fill" style="color:#FF6B35;" />
+            <span class="text-xs font-medium text-muted-foreground tracking-wide uppercase">Business Dashboard</span>
           </div>
           <h1 class="text-2xl font-bold">{user?.businessName || 'My Business'}</h1>
         </div>
-        <button
-          class="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90"
-          style="background-color: #FF6B35;"
-          on:click={() => goto('/business/menu')}
-        >
-          <BookOpen class="w-4 h-4" /> Manage Menu
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            class="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors"
+            on:click={() => goto('/business/analytics')}
+          >
+            <ChartBarIcon size={15} weight="duotone" />
+            Analytics
+          </button>
+          <button
+            class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+            style="background-color:#FF6B35;"
+            on:click={() => goto('/business/menu')}
+          >
+            <BookOpenIcon size={15} weight="fill" />
+            Manage Menu
+          </button>
+        </div>
       </div>
 
-      <!-- Stats -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        {#each [
-          { label: 'Pending', value: orders.filter(o => o.status === 'pending').length, icon: Clock, color: '#F59E0B' },
-          { label: 'Preparing', value: orders.filter(o => o.status === 'preparing').length, icon: ChefHat, color: '#8B5CF6' },
-          { label: 'Delivered Today', value: orders.filter(o => o.status === 'delivered' && formatDate(o.created) === formatDate(new Date())).length, icon: CheckCircle, color: '#10B981' },
-          { label: 'Menu Items', value: menuCount, icon: BookOpen, color: '#FF6B35' },
-        ] as stat}
-          {@const Icon = stat.icon}
-          <div class="bg-card border border-border rounded-2xl p-4">
-            <div class="flex items-center justify-between mb-2">
-              <span class="text-sm text-muted-foreground">{stat.label}</span>
-              <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background-color: {stat.color}20;">
-                <Icon class="w-4 h-4" style="color: {stat.color};" />
-              </div>
+      <!-- ── STAT CARDS ── -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <!-- Pending -->
+        <div class="bg-card border border-border rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-medium text-muted-foreground">Pending</span>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#FEF3C720;">
+              <ClockIcon size={15} weight="duotone" style="color:#F59E0B;" />
             </div>
-            <p class="text-2xl font-bold text-foreground">{stat.value}</p>
           </div>
-        {/each}
+          <p class="text-2xl font-bold">{orders.filter(o => o.status === 'pending').length}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">need action</p>
+        </div>
+
+        <!-- Preparing -->
+        <div class="bg-card border border-border rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-medium text-muted-foreground">Preparing</span>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#EDE9FE20;">
+              <CookingPotIcon size={15} weight="duotone" style="color:#8B5CF6;" />
+            </div>
+          </div>
+          <p class="text-2xl font-bold">{orders.filter(o => o.status === 'preparing').length}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">in kitchen</p>
+        </div>
+
+        <!-- Delivered today -->
+        <div class="bg-card border border-border rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-medium text-muted-foreground">Delivered Today</span>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#D1FAE520;">
+              <CheckCircleIcon size={15} weight="duotone" style="color:#10B981;" />
+            </div>
+          </div>
+          <p class="text-2xl font-bold">{todayDelivered}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">completed</p>
+        </div>
+
+        <!-- Today's revenue -->
+        <div class="bg-card border border-border rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-medium text-muted-foreground">Today's Revenue</span>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#FF6B3520;">
+              <ChartBarIcon size={15} weight="duotone" style="color:#FF6B35;" />
+            </div>
+          </div>
+          <p class="text-2xl font-bold">Rs.{todayRevenue.toFixed(0)}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">{menuCount} menu items</p>
+        </div>
       </div>
 
-      <!-- Orders table -->
-      <div class="bg-card border border-border rounded-2xl overflow-hidden mb-6">
-        <div class="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 class="font-bold text-foreground">Orders</h2>
+      <!-- ── ORDERS PANEL ── -->
+      <div class="bg-card border border-border rounded-2xl overflow-hidden flex flex-col" style="height: 520px;">
+
+        <!-- Panel header -->
+        <div class="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
+          <div class="flex items-center gap-2">
+            <h2 class="font-bold text-sm">Orders</h2>
+            <span class="text-xs text-muted-foreground">{orders.length} total</span>
+          </div>
           {#if pendingCount > 0}
-            <span class="px-2.5 py-1 rounded-full text-xs font-bold text-white" style="background-color: #FF6B35;">
+            <span
+              class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold text-white animate-pulse"
+              style="background-color:#FF6B35;"
+            >
+              <ClockIcon size={11} weight="fill" />
               {pendingCount} new
             </span>
           {/if}
         </div>
 
-        <!-- Tabs -->
-        <div class="flex gap-1 p-3 border-b border-border overflow-x-auto">
+        <!-- Sticky tab bar -->
+        <div class="flex gap-1 px-3 py-2 border-b border-border bg-card flex-shrink-0 overflow-x-auto scrollbar-hide">
           {#each tabs as tab}
+            {@const count = tabCounts[tab.key] || 0}
             <button
-              class="px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors flex-shrink-0 {activeTab === tab ? 'text-white' : 'text-muted-foreground hover:bg-muted'}"
-              style={activeTab === tab ? 'background-color: #FF6B35;' : ''}
-              on:click={() => activeTab = tab}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex-shrink-0 whitespace-nowrap"
+              style={activeTab === tab.key
+                ? 'background-color:#FF6B35;color:white;'
+                : 'color:var(--muted-foreground);'}
+              class:hover:bg-muted={activeTab !== tab.key}
+              on:click={() => activeTab = tab.key}
             >
-              {tab}
-              {#if tab === 'pending' && pendingCount > 0}
-                <span class="ml-1 w-4 h-4 rounded-full bg-white/30 text-xs inline-flex items-center justify-center">{pendingCount}</span>
+              {tab.label}
+              {#if count > 0}
+                <span
+                  class="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold inline-flex items-center justify-center"
+                  style={activeTab === tab.key
+                    ? 'background:rgba(255,255,255,0.25);color:white;'
+                    : tab.key === 'pending'
+                      ? 'background:#FF6B35;color:white;'
+                      : 'background:hsl(var(--muted));color:hsl(var(--muted-foreground));'}
+                >
+                  {count}
+                </span>
               {/if}
             </button>
           {/each}
         </div>
 
-        {#if loading}
-          <div class="p-10 text-center text-muted-foreground">Loading orders...</div>
-        {:else if filteredOrders.length === 0}
-          <div class="p-10 text-center">
-            <ShoppingBag class="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-            <p class="text-muted-foreground text-sm">No {activeTab} orders</p>
-          </div>
-        {:else}
-          <div class="divide-y divide-border">
-            {#each filteredOrders as order}
-              <div class="p-5">
-                <div class="flex items-start justify-between gap-4">
-                  <div class="flex-1">
-                    <div class="flex items-center gap-2 mb-1">
-                      <span class="font-semibold text-sm text-foreground">
+        <!-- Scrollable order list -->
+        <div class="flex-1 overflow-y-auto">
+          {#if loading}
+            <!-- Skeleton -->
+            <div class="divide-y divide-border">
+              {#each Array(5) as _}
+                <div class="flex items-center gap-3 px-4 py-3">
+                  <div class="skeleton w-8 h-8 rounded-full flex-shrink-0"></div>
+                  <div class="flex-1 space-y-1.5">
+                    <div class="skeleton h-3 w-32 rounded"></div>
+                    <div class="skeleton h-2.5 w-48 rounded"></div>
+                  </div>
+                  <div class="skeleton h-7 w-20 rounded-lg"></div>
+                </div>
+              {/each}
+            </div>
+
+          {:else if filteredOrders.length === 0}
+            <div class="flex flex-col items-center justify-center h-full py-12 text-center">
+              <div class="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-3">
+                <ShoppingBagIcon size={22} weight="duotone" class="text-muted-foreground" />
+              </div>
+              <p class="font-medium text-sm text-foreground mb-1">No {activeTab} orders</p>
+              <p class="text-xs text-muted-foreground">
+                {activeTab === 'pending' ? 'New orders will appear here' : 'Orders in this state will show here'}
+              </p>
+            </div>
+
+          {:else}
+            <!-- Column headers -->
+            <div class="grid grid-cols-[1fr_auto] gap-2 px-4 py-2 border-b border-border bg-muted/30">
+              <div class="grid gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider" style="grid-template-columns: 28px 110px 1fr 72px;">
+                <span></span>
+                <span>Customer</span>
+                <span>Items</span>
+                <span>Amount</span>
+              </div>
+              <span class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Actions</span>
+            </div>
+
+            <!-- Order rows -->
+            <div class="divide-y divide-border">
+              {#each filteredOrders as order (order.id)}
+                {@const st = statusStyle[order.status] || statusStyle.pending}
+                {@const isUpdating = updatingOrderId === order.id}
+
+                <div
+                  class="grid grid-cols-[1fr_auto] gap-2 px-4 py-2.5 items-center hover:bg-muted/30 transition-colors"
+                  class:opacity-60={isUpdating}
+                >
+                  <!-- Left: order info -->
+                  <div class="grid gap-2 items-center min-w-0" style="grid-template-columns: 28px 110px 1fr 72px;">
+
+                    <!-- Status dot -->
+                    <div class="flex items-center justify-center">
+                      <div class="w-2 h-2 rounded-full flex-shrink-0" style="background:{st.dot};"></div>
+                    </div>
+
+                    <!-- Customer + time -->
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold text-foreground truncate">
                         {order.expand?.buyer?.username || 'Customer'}
-                      </span>
-                      <span class="text-xs text-muted-foreground">· {formatTime(order.created)}</span>
-                      <span class="px-2 py-0.5 rounded-full text-xs font-medium capitalize {statusColors[order.status]}">
+                      </p>
+                      <p class="text-[10px] text-muted-foreground">
+                        {formatDate(order.created)} · {formatTime(order.created)}
+                      </p>
+                    </div>
+
+                    <!-- Items -->
+                    <div class="min-w-0">
+                      <p class="text-xs text-foreground truncate">{itemsSummary(order.items)}</p>
+                      {#if order.notes}
+                        <p class="text-[10px] text-muted-foreground italic truncate">"{order.notes}"</p>
+                      {/if}
+                    </div>
+
+                    <!-- Amount -->
+                    <div>
+                      <p class="text-xs font-bold text-foreground">Rs.{order.totalAmount?.toFixed(0)}</p>
+                      <span
+                        class="text-[9px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
+                        style="background:{st.bg};color:{st.text};"
+                      >
                         {order.status}
                       </span>
                     </div>
-                    <div class="text-sm text-muted-foreground mb-2">
-                      {#each (order.items || []) as item, i}
-                        <span>{item.quantity}× {item.name}</span>
-                        {#if i < (order.items || []).length - 1}<span class="mx-1">·</span>{/if}
-                      {/each}
-                    </div>
-                    {#if order.notes}
-                      <p class="text-xs text-muted-foreground italic mb-2">Note: "{order.notes}"</p>
-                    {/if}
-                    <p class="text-sm font-bold text-foreground">Rs. {order.totalAmount?.toFixed(2)}</p>
                   </div>
-                  <div class="flex flex-col gap-2 flex-shrink-0">
+
+                  <!-- Right: action buttons -->
+                  <div class="flex items-center gap-1.5 flex-shrink-0">
                     {#if nextStatus[order.status]}
                       <button
-                        class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white hover:opacity-90 transition-opacity"
-                        style="background-color: #FF6B35;"
+                        class="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-50 whitespace-nowrap"
+                        style="background-color:#FF6B35;"
+                        disabled={isUpdating}
                         on:click={() => updateOrderStatus(order, nextStatus[order.status])}
                       >
-                        {nextStatusLabel[order.status]}
+                        {isUpdating ? '…' : nextLabel[order.status]}
                       </button>
                     {/if}
+
                     {#if order.status !== 'delivered' && order.status !== 'cancelled'}
                       <button
-                        class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20"
+                        class="p-1.5 rounded-lg border border-red-200 dark:border-red-900 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-50"
+                        title="Cancel order"
+                        disabled={isUpdating}
                         on:click={() => cancelOrder(order)}
                       >
-                        Cancel
+                        <XCircleIcon size={14} weight="fill" />
                       </button>
                     {/if}
-                  </div>
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
 
-      <!-- ── Income Graph ─────────────────────────────────────── -->
-      <div class="bg-card border border-border rounded-2xl overflow-hidden">
-        <!-- Graph header -->
-        <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4 flex-wrap">
-          <div class="flex items-center gap-2">
-            <TrendingUp class="w-4 h-4" style="color: #FF6B35;" />
-            <h2 class="font-bold text-foreground">Income</h2>
-            <span class="text-xs text-muted-foreground">(delivered orders only)</span>
-          </div>
-
-          <!-- Range selector -->
-          <div class="flex gap-1 bg-muted rounded-lg p-1">
-            {#each [['7','7d'], ['14','14d'], ['30','30d']] as [val, label]}
-              <button
-                class="px-3 py-1 rounded-md text-xs font-semibold transition-colors {graphRange === val ? 'text-white' : 'text-muted-foreground hover:text-foreground'}"
-                style={graphRange === val ? 'background-color: #FF6B35;' : ''}
-                on:click={() => graphRange = val}
-              >
-                {label}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <!-- Summary pills -->
-        <div class="flex gap-4 px-5 pt-4 pb-2 flex-wrap">
-          <div class="flex flex-col">
-            <span class="text-xs text-muted-foreground">Total ({graphRange}d)</span>
-            <span class="text-lg font-bold text-foreground">Rs. {totalIncome.toFixed(0)}</span>
-          </div>
-          <div class="w-px bg-border self-stretch mx-1"></div>
-          <div class="flex flex-col">
-            <span class="text-xs text-muted-foreground">Daily avg</span>
-            <span class="text-lg font-bold text-foreground">Rs. {avgIncome.toFixed(0)}</span>
-          </div>
-          <div class="w-px bg-border self-stretch mx-1"></div>
-          <div class="flex flex-col">
-            <span class="text-xs text-muted-foreground">Best day</span>
-            <span class="text-lg font-bold text-foreground">
-              Rs. {Math.max(...incomeData.map(d => d.amount)).toFixed(0)}
-            </span>
-          </div>
-        </div>
-
-        <!-- Bar chart -->
-        <div class="px-5 pb-5 pt-2">
-          {#if loading}
-            <div class="h-40 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>
-          {:else if totalIncome === 0}
-            <div class="h-40 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-              <TrendingUp class="w-8 h-8 opacity-30" />
-              <p class="text-sm">No income in this period yet</p>
-            </div>
-          {:else}
-            <!-- Y-axis labels + bars -->
-            <div class="flex gap-2 items-end" style="height: 160px;">
-              <!-- Y labels -->
-              <div class="flex flex-col justify-between h-full text-right pr-2 flex-shrink-0" style="width:52px">
-                <span class="text-[10px] text-muted-foreground">Rs.{maxIncome.toFixed(0)}</span>
-                <span class="text-[10px] text-muted-foreground">Rs.{(maxIncome/2).toFixed(0)}</span>
-                <span class="text-[10px] text-muted-foreground">0</span>
-              </div>
-
-              <!-- Bars -->
-              <div class="flex-1 flex items-end gap-[3px] h-full relative">
-                <!-- Grid lines -->
-                <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
-                  <div class="border-t border-dashed border-border opacity-50"></div>
-                  <div class="border-t border-dashed border-border opacity-50"></div>
-                  <div class="border-t border-border opacity-30"></div>
-                </div>
-
-                {#each incomeData as bar}
-                  {@const heightPct = maxIncome > 0 ? (bar.amount / maxIncome) * 100 : 0}
-                  {@const isToday = bar.date === new Date().toLocaleDateString('en-CA')}
-                  <div
-                    class="relative flex-1 flex flex-col items-center justify-end h-full group cursor-default"
-                    role="img"
-                    aria-label="{bar.label}: Rs. {bar.amount}"
-                    on:mouseenter={(e) => onBarEnter(e, bar)}
-                    on:mouseleave={onBarLeave}
-                    on:mousemove={onBarMove}
-                  >
-                    <!-- Bar fill -->
-                    <div
-                      class="w-full rounded-t-md transition-all duration-300 group-hover:opacity-80"
-                      style="
-                        height: {Math.max(heightPct, bar.amount > 0 ? 4 : 0)}%;
-                        background-color: {isToday ? '#FF6B35' : '#FF6B3560'};
-                        min-height: {bar.amount > 0 ? '4px' : '0'};
-                      "
-                    ></div>
-
-                    <!-- X label — show every Nth to avoid clutter -->
-                    {#if incomeData.length <= 10 || incomeData.indexOf(bar) % Math.ceil(incomeData.length / 8) === 0 || isToday}
-                      <span
-                        class="absolute -bottom-5 text-[9px] whitespace-nowrap {isToday ? 'font-bold' : 'text-muted-foreground'}"
-                        style={isToday ? 'color: #FF6B35;' : ''}
-                      >
-                        {isToday ? 'Today' : bar.label}
-                      </span>
+                    {#if order.status === 'delivered' || order.status === 'cancelled'}
+                      <span class="text-[10px] text-muted-foreground px-1">—</span>
                     {/if}
                   </div>
-                {/each}
-              </div>
+                </div>
+              {/each}
             </div>
 
-            <!-- X-axis spacer for labels -->
-            <div class="h-6"></div>
+            <!-- Footer row count -->
+            <div class="px-4 py-2.5 border-t border-border bg-muted/20 flex items-center justify-between">
+              <span class="text-[11px] text-muted-foreground">
+                {filteredOrders.length} {activeTab} order{filteredOrders.length !== 1 ? 's' : ''}
+              </span>
+              {#if activeTab === 'delivered'}
+                <span class="text-[11px] font-semibold" style="color:#FF6B35;">
+                  Total: Rs.{filteredOrders.reduce((s, o) => s + (o.totalAmount || 0), 0).toFixed(0)}
+                </span>
+              {/if}
+            </div>
           {/if}
         </div>
       </div>
@@ -412,3 +450,29 @@
     </div>
   </main>
 </div>
+
+<style>
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 25%,
+      hsl(var(--secondary)) 50%,
+      hsl(var(--muted)) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  .animate-pulse { animation: pulse 2s ease-in-out infinite; }
+</style>

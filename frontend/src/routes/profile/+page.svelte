@@ -9,13 +9,14 @@
   import HighlightsSection from '$lib/components/HighlightsSection.svelte';
   import RecipeEditor from '$lib/components/RecipeEditor.svelte';
   import RecipeView from '$lib/components/RecipeView.svelte';
+  import MenuItemForm from '$lib/components/MenuItemForm.svelte';
   import {
     CameraIcon, HeartIcon, ChatCircleIcon, StorefrontIcon,
     CookingPotIcon, TruckIcon, ForkKnifeIcon, PhoneIcon,
     MapPinIcon, ClockIcon, ShoppingCartIcon, MinusIcon, PlusIcon,
     XIcon, BookOpenTextIcon, PencilSimpleIcon, TrashIcon,
     CaretUpIcon, CaretDownIcon, ToggleLeftIcon, ToggleRightIcon,
-    CheckCircleIcon, WarningCircleIcon, SlidersIcon,
+    CheckCircleIcon, WarningCircleIcon,
     ArrowLeftIcon, ArrowRightIcon, SignOutIcon,
   } from 'phosphor-svelte';
   import {
@@ -34,48 +35,35 @@
   // Posts
   let posts = [], postsCount = 0, postStats = {};
 
-  // Lightbox (for browsing) + PostModal (for likes/comments)
-  let lightboxIndex = null;
-  let selectedPostId = null;   // opens PostModal with full like/comment support
+  // PostModal
+  let selectedPostId = null;
+  let selectedPostIndex = null;
 
-  function openLightbox(idx) { lightboxIndex = idx; }
-  function closeLightbox() { lightboxIndex = null; }
-  function lightboxPrev() {
-    if (lightboxIndex === null) return;
-    lightboxIndex = (lightboxIndex - 1 + posts.length) % posts.length;
-  }
-  function lightboxNext() {
-    if (lightboxIndex === null) return;
-    lightboxIndex = (lightboxIndex + 1) % posts.length;
-  }
-  function handleLightboxKey(e) {
-    if (lightboxIndex === null) return;
-    if (e.key === 'ArrowLeft')  lightboxPrev();
-    if (e.key === 'ArrowRight') lightboxNext();
-    if (e.key === 'Escape')     closeLightbox();
-  }
-  function openPostModal(postId) {
-    closeLightbox();
+  function openPostModal(postId, index) {
     selectedPostId = postId;
+    selectedPostIndex = index;
+  }
+  function closePostModal() {
+    selectedPostId = null;
+    selectedPostIndex = null;
+  }
+
+  function onLikeToggled(postId, delta) {
+    postStats = {
+      ...postStats,
+      [postId]: {
+        ...(postStats[postId] || {}),
+        likes: Math.max(0, (postStats[postId]?.likes ?? 0) + delta),
+      },
+    };
   }
 
   // Menu
   let menuItems = [], menuLoaded = false;
   let activeCategory = null;
 
-  // Menu item form (owner only)
-  let showMenuForm = false, editingMenuItem = null, savingMenuItem = false;
-  let menuForm = {
-    name: '', description: '', price: '', category: '', preparationTime: '15', isAvailable: true,
-    modifiers: [],
-  };
-  let menuImageFile = null, menuImagePreview = null;
-  const MENU_CATS = ['Momo','Thali','Chowmein','Snacks','Drinks','Desserts','Rice','Other'];
-
-  // Modifier builder
-  let editingModifierIdx = null;
-  let draftModifier = { id: '', label: '', type: 'radio', required: false, options: [] };
-  let draftOption = { id: '', name: '', price: '' };
+  // Menu item form — now uses MenuItemForm component
+  let showMenuForm = false, editingMenuItem = null;
 
   // Modifier selection modal (customer)
   let showModModal = false;
@@ -87,7 +75,7 @@
   let showEditor = false, editingRecipe = null, viewingRecipe = null;
   let recipeTitle = '', recipeTags = '', recipeCoverPreview = null, recipeBlocks = [];
 
-  // Active tab — 'posts' | 'recipes' | 'menu'
+  // Active tab
   let activeTab = 'posts';
 
   // Cart
@@ -122,23 +110,17 @@
       if (!isOwnProfile) {
         try {
           const r = await pb.collection('follows').getList(1, 1, {
-            filter: `follower="${currentUser.id}"&&following="${user.id}"`,
+            filter: `follower = "${currentUser.id}" && following = "${user.id}"`,
           });
           if (r.items.length) { isFollowing = true; followRecordId = r.items[0].id; }
         } catch (_) {}
       }
     }
-
-    window.addEventListener('keydown', handleLightboxKey);
-  });
-
-  onDestroy(() => {
-    window.removeEventListener('keydown', handleLightboxKey);
   });
 
   async function loadProfile(uname) {
     try {
-      const r = await pb.collection('users').getList(1, 1, { filter: `username="${uname}"` });
+      const r = await pb.collection('users').getList(1, 1, { filter: `username = "${uname}"` });
       user = r.items[0] ?? null;
       if (!user) goto('/search');
     } catch (_) { goto('/search'); }
@@ -148,8 +130,8 @@
   async function loadFollowData() {
     try {
       const [a, b] = await Promise.all([
-        pb.collection('follows').getList(1, 1, { filter: `following="${user.id}"` }),
-        pb.collection('follows').getList(1, 1, { filter: `follower="${user.id}"` }),
+        pb.collection('follows').getList(1, 1, { filter: `following = "${user.id}"` }),
+        pb.collection('follows').getList(1, 1, { filter: `follower = "${user.id}"` }),
       ]);
       followersCount = a.totalItems; followingCount = b.totalItems;
     } catch (_) {}
@@ -157,22 +139,32 @@
 
   async function loadPosts() {
     try {
-      const r = await pb.collection('posts').getList(1, 50, { filter: `user="${user.id}"`, sort: '-created' });
-      posts = r.items; postsCount = r.totalItems;
-      for (const p of posts) {
-        pb.collection('likes').getList(1, 1, { filter: `post="${p.id}"` }).then(r => {
-          postStats[p.id] = { ...(postStats[p.id] || {}), likes: r.totalItems }; postStats = postStats;
-        });
-        pb.collection('comments').getList(1, 1, { filter: `post="${p.id}"` }).then(r => {
-          postStats[p.id] = { ...(postStats[p.id] || {}), comments: r.totalItems }; postStats = postStats;
-        });
-      }
+      const r = await pb.collection('posts').getList(1, 50, {
+        filter: `user = "${user.id}"`,
+        sort: '-created',
+      });
+      posts = r.items;
+      postsCount = r.totalItems;
+
+      if (posts.length === 0) return;
+
+      const idFilter = posts.map(p => `post = "${p.id}"`).join(' || ');
+      const [allLikes, allComments] = await Promise.all([
+        pb.collection('likes').getFullList({ filter: idFilter, fields: 'post' }),
+        pb.collection('comments').getFullList({ filter: idFilter, fields: 'post' }),
+      ]);
+
+      const stats = {};
+      for (const p of posts) stats[p.id] = { likes: 0, comments: 0 };
+      for (const l of allLikes)    stats[l.post].likes++;
+      for (const c of allComments) stats[c.post].comments++;
+      postStats = stats;
     } catch (_) { posts = []; }
   }
 
   async function loadMenu() {
     try {
-      const filter = isOwnProfile ? `seller="${user.id}"` : `seller="${user.id}"&&isAvailable=true`;
+      const filter = isOwnProfile ? `seller = "${user.id}"` : `seller = "${user.id}" && isAvailable = true`;
       const r = await pb.collection('menuItems').getFullList({ filter, sort: 'category,name' });
       menuItems = r; menuLoaded = true;
       if (!activeCategory && r.length) activeCategory = r[0].category || 'Other';
@@ -181,86 +173,48 @@
 
   async function loadRecipes() {
     try {
-      const r = await pb.collection('recipes').getList(1, 50, { filter: `user="${user.id}"`, sort: '-created' });
+      const r = await pb.collection('recipes').getList(1, 50, { filter: `user = "${user.id}"`, sort: '-created' });
       recipes = r.items;
-    } catch (err) {
-      console.error('Failed to load recipes:', err);
-      recipes = [];
-    }
+    } catch (_) { recipes = []; }
   }
 
   // ── Post helpers ──────────────────────────────────────────────────────────────
   function handlePostDeleted(id) {
     posts = posts.filter(p => p.id !== id);
     postsCount = Math.max(0, postsCount - 1);
-    closeLightbox();
-    selectedPostId = null;
+    closePostModal();
   }
 
   function logout() { pb.authStore.clear(); goto('/auth/login'); }
 
-  // ── Menu form (owner) ─────────────────────────────────────────────────────────
+  // ── Menu form handlers (now delegated to MenuItemForm component) ──────────────
   function openNewMenuItem() {
     editingMenuItem = null;
-    menuForm = { name: '', description: '', price: '', category: MENU_CATS[0], preparationTime: '15', isAvailable: true, modifiers: [] };
-    menuImageFile = null; menuImagePreview = null;
-    editingModifierIdx = null;
     showMenuForm = true;
   }
 
   function openEditMenuItem(item) {
     editingMenuItem = item;
-    let mods = [];
-    if (item.modifiers) {
-      try { mods = typeof item.modifiers === 'string' ? JSON.parse(item.modifiers) : item.modifiers; } catch (_) {}
-    }
-    menuForm = {
-      name: item.name, description: item.description || '',
-      price: item.price, category: item.category || MENU_CATS[0],
-      preparationTime: item.preparationTime || '15', isAvailable: item.isAvailable,
-      modifiers: mods,
-    };
-    menuImageFile = null;
-    menuImagePreview = item.image ? pb.files.getUrl(item, item.image) : null;
-    editingModifierIdx = null;
     showMenuForm = true;
   }
 
-  function handleMenuImg(e) {
-    menuImageFile = e.target.files[0];
-    if (menuImageFile) {
-      const r = new FileReader(); r.onload = ev => menuImagePreview = ev.target.result; r.readAsDataURL(menuImageFile);
-    }
+  function handleMenuFormClose() {
+    showMenuForm = false;
+    editingMenuItem = null;
   }
 
-  async function saveMenuItem() {
-    if (!menuForm.name.trim() || !menuForm.price) { showToast('Name and price are required', 'error'); return; }
-    savingMenuItem = true;
-    try {
-      const fd = new FormData();
-      fd.append('name', menuForm.name.trim());
-      fd.append('description', menuForm.description);
-      fd.append('price', parseFloat(menuForm.price));
-      fd.append('category', menuForm.category);
-      fd.append('preparationTime', parseInt(menuForm.preparationTime) || 15);
-      fd.append('isAvailable', menuForm.isAvailable ? 'true' : 'false');
-      fd.append('seller', user.id);
-      fd.append('modifiers', JSON.stringify(menuForm.modifiers));
-      if (menuImageFile) fd.append('image', menuImageFile);
-
-      if (editingMenuItem) {
-        const updated = await pb.collection('menuItems').update(editingMenuItem.id, fd);
-        menuItems = menuItems.map(m => m.id === updated.id ? updated : m);
-        showToast('Menu item updated ✓');
-      } else {
-        const created = await pb.collection('menuItems').create(fd);
-        menuItems = [created, ...menuItems];
-        if (!activeCategory) activeCategory = created.category || 'Other';
-        showToast('Menu item added ✓');
-      }
-      showMenuForm = false;
-    } catch (err) { showToast(err.message || 'Failed to save', 'error'); }
-    finally { savingMenuItem = false; }
+  // Called by MenuItemForm after a successful save
+  function handleMenuItemSaved(savedItem) {
+    if (editingMenuItem) {
+      menuItems = menuItems.map(m => m.id === savedItem.id ? savedItem : m);
+      showToast('Menu item updated ✓');
+    } else {
+      menuItems = [savedItem, ...menuItems];
+      if (!activeCategory) activeCategory = savedItem.category || 'Other';
+      showToast('Menu item added ✓');
+    }
+    showMenuForm = false;
+    editingMenuItem = null;
   }
 
   async function deleteMenuItem(item) {
@@ -277,49 +231,6 @@
       const updated = await pb.collection('menuItems').update(item.id, { isAvailable: !item.isAvailable });
       menuItems = menuItems.map(m => m.id === item.id ? updated : m);
     } catch (_) { showToast('Failed to update', 'error'); }
-  }
-
-  // ── Modifier builder ──────────────────────────────────────────────────────────
-  function startNewModifier() {
-    draftModifier = { id: `mod_${Date.now()}`, label: '', type: 'radio', required: false, options: [] };
-    draftOption = { id: '', name: '', price: '' };
-    editingModifierIdx = 'new';
-  }
-
-  function startEditModifier(idx) {
-    draftModifier = JSON.parse(JSON.stringify(menuForm.modifiers[idx]));
-    draftOption = { id: '', name: '', price: '' };
-    editingModifierIdx = idx;
-  }
-
-  function addDraftOption() {
-    const name = draftOption.name.trim();
-    if (!name) return;
-    const opt = { id: `opt_${Date.now()}`, name, price: parseFloat(draftOption.price) || 0 };
-    draftModifier = { ...draftModifier, options: [...draftModifier.options, opt] };
-    draftOption = { id: '', name: '', price: '' };
-  }
-
-  function removeDraftOption(optId) {
-    draftModifier = { ...draftModifier, options: draftModifier.options.filter(o => o.id !== optId) };
-  }
-
-  function saveDraftModifier() {
-    if (!draftModifier.label.trim()) { showToast('Group label required', 'error'); return; }
-    if (draftModifier.options.length === 0) { showToast('Add at least one option', 'error'); return; }
-    if (editingModifierIdx === 'new') {
-      menuForm = { ...menuForm, modifiers: [...menuForm.modifiers, { ...draftModifier }] };
-    } else {
-      const mods = [...menuForm.modifiers];
-      mods[editingModifierIdx] = { ...draftModifier };
-      menuForm = { ...menuForm, modifiers: mods };
-    }
-    editingModifierIdx = null;
-  }
-
-  function removeModifier(idx) {
-    menuForm = { ...menuForm, modifiers: menuForm.modifiers.filter((_, i) => i !== idx) };
-    if (editingModifierIdx === idx) editingModifierIdx = null;
   }
 
   // ── Modifier selection modal (customer) ───────────────────────────────────────
@@ -524,9 +435,6 @@
   $: filteredMenuItems = activeCategory && groupedMenu[activeCategory]
     ? { [activeCategory]: groupedMenu[activeCategory] }
     : groupedMenu;
-
-  $: lightboxPost = lightboxIndex !== null ? posts[lightboxIndex] : null;
-  $: hasMultiplePosts = posts.length > 1;
 </script>
 
 <!-- ════════ TOAST ════════════════════════════════════════════════════════════ -->
@@ -539,91 +447,32 @@
   </div>
 {/if}
 
-<!-- ════════ POST LIGHTBOX ════════════════════════════════════════════════════ -->
-{#if lightboxIndex !== null && lightboxPost}
-  <div
-    class="fixed inset-0 z-[90] bg-black/90 flex items-center justify-center"
-    on:click|self={closeLightbox}
-    role="dialog"
-    aria-modal="true"
-  >
-    <!-- Close -->
-    <button
-      class="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white z-10"
-      on:click={closeLightbox}
-    >
-      <XIcon size={18}/>
-    </button>
-
-    <!-- Prev -->
-    {#if hasMultiplePosts}
-      <button
-        class="absolute left-3 sm:left-6 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white z-10"
-        on:click|stopPropagation={lightboxPrev}
-      >
-        <ArrowLeftIcon size={20} weight="bold"/>
-      </button>
-    {/if}
-
-    <!-- Image + action bar -->
-    <div class="relative max-w-2xl w-full mx-16 flex flex-col items-center">
-      <img
-        src={pb.files.getUrl(lightboxPost, lightboxPost.image)}
-        alt={lightboxPost.caption || ''}
-        class="max-h-[75vh] w-full object-contain rounded-xl"
-      />
-      <!-- Bottom bar: stats + counter + like/comment button -->
-      <div class="w-full mt-3 flex items-center justify-between px-1 gap-3">
-        <div class="flex items-center gap-3 text-white/80 text-xs">
-          <span class="flex items-center gap-1">
-            <HeartIcon size={13} weight="fill"/>{postStats[lightboxPost.id]?.likes || 0}
-          </span>
-          <span class="flex items-center gap-1">
-            <ChatCircleIcon size={13} weight="fill"/>{postStats[lightboxPost.id]?.comments || 0}
-          </span>
-        </div>
-        {#if lightboxPost.caption}
-          <p class="text-white/60 text-xs truncate flex-1">{lightboxPost.caption}</p>
-        {/if}
-        <div class="flex items-center gap-2 flex-shrink-0">
-          <span class="text-white/50 text-xs">{lightboxIndex + 1} / {posts.length}</span>
-          <!-- Opens PostModal so user can like, comment, delete -->
-          <button
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white hover:opacity-90"
-            style="background-color:#FF6B35;"
-            on:click|stopPropagation={() => openPostModal(lightboxPost.id)}
-          >
-            Like &amp; comment
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Next -->
-    {#if hasMultiplePosts}
-      <button
-        class="absolute right-3 sm:right-6 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white z-10"
-        on:click|stopPropagation={lightboxNext}
-      >
-        <ArrowRightIcon size={20} weight="bold"/>
-      </button>
-    {/if}
-  </div>
-{/if}
-
-<!-- ════════ POST MODAL (likes / comments) ═══════════════════════════════════ -->
+<!-- ════════ POST MODAL ════════════════════════════════════════════════════════ -->
 {#if selectedPostId}
   <PostModal
     postId={selectedPostId}
-    onClose={() => { selectedPostId = null; loadPosts(); }}
+    posts={posts}
+    initialIndex={selectedPostIndex}
+    onClose={closePostModal}
     onDelete={handlePostDeleted}
+    onLikeToggled={onLikeToggled}
+  />
+{/if}
+
+<!-- ════════ MENU ITEM FORM (shared component) ═══════════════════════════════ -->
+{#if showMenuForm && user}
+  <MenuItemForm
+    editingItem={editingMenuItem}
+    userId={user.id}
+    onSave={handleMenuItemSaved}
+    onClose={handleMenuFormClose}
   />
 {/if}
 
 <!-- ════════ MODIFIER SELECTION MODAL (customer) ═════════════════════════════ -->
 {#if showModModal && modModalItem}
-  <div class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" on:click|self={closeModModal}>
-    <div class="bg-background border border-border rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden" style="max-height:88vh;">
+  <div class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 pt-20 sm:pt-4 overflow-y-auto" on:click|self={closeModModal}>
+    <div class="bg-background border border-border rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden my-auto" style="max-height: calc(100vh - 80px);">
       <div class="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
         <div>
           <h2 class="font-bold text-base">{modModalItem.name}</h2>
@@ -674,150 +523,6 @@
           disabled={!modModalValid}
           on:click={confirmModAdd}
         >Add to cart</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- ════════ MENU ITEM FORM MODAL (owner) ════════════════════════════════════ -->
-{#if showMenuForm}
-  <div class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" on:click|self={() => showMenuForm = false}>
-    <div class="bg-background border border-border rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden" style="max-height:92vh;">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
-        <h2 class="font-bold text-base">{editingMenuItem ? 'Edit item' : 'Add menu item'}</h2>
-        <button class="p-1.5 hover:bg-muted rounded-lg" on:click={() => showMenuForm = false}><XIcon size={18}/></button>
-      </div>
-      <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-        <div>
-          <label class="block text-xs font-semibold text-muted-foreground mb-1">Name <span class="text-red-500">*</span></label>
-          <input class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm" bind:value={menuForm.name} placeholder="e.g. Chicken Momo"/>
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-muted-foreground mb-1">Description</label>
-          <textarea rows="2" class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm resize-none" bind:value={menuForm.description} placeholder="What's special about this dish?"/>
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-xs font-semibold text-muted-foreground mb-1">Base price (Rs.) <span class="text-red-500">*</span></label>
-            <input type="number" class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm" bind:value={menuForm.price} placeholder="0" min="0"/>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-muted-foreground mb-1">Prep time (min)</label>
-            <input type="number" class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm" bind:value={menuForm.preparationTime} placeholder="15" min="1"/>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-muted-foreground mb-1">Category</label>
-          <select class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm" bind:value={menuForm.category}>
-            {#each MENU_CATS as cat}<option value={cat}>{cat}</option>{/each}
-          </select>
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-muted-foreground mb-2">Photo</label>
-          {#if menuImagePreview}
-            <div class="relative w-20 h-20 mb-2">
-              <img src={menuImagePreview} alt="" class="w-full h-full rounded-xl object-cover"/>
-              <button class="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white"
-                on:click={() => { menuImageFile = null; menuImagePreview = null; }}>
-                <XIcon size={10}/>
-              </button>
-            </div>
-          {/if}
-          <label class="cursor-pointer inline-flex items-center gap-1.5 border border-border px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-muted">
-            Choose photo
-            <input type="file" accept="image/*" class="hidden" on:change={handleMenuImg}/>
-          </label>
-        </div>
-        <div class="flex items-center justify-between py-2 px-3 bg-muted/50 rounded-xl">
-          <span class="text-sm font-medium">Available to order</span>
-          <button on:click={() => menuForm.isAvailable = !menuForm.isAvailable}>
-            {#if menuForm.isAvailable}<ToggleRightIcon size={28} style="color:#FF6B35;"/>
-            {:else}<ToggleLeftIcon size={28} class="text-muted-foreground"/>{/if}
-          </button>
-        </div>
-        <!-- Modifiers -->
-        <div class="border-t border-border pt-4">
-          <div class="flex items-center justify-between mb-3">
-            <div>
-              <p class="text-sm font-semibold">Add-ons & options</p>
-              <p class="text-xs text-muted-foreground">Let customers customise their order</p>
-            </div>
-            {#if editingModifierIdx === null}
-              <button class="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg text-white hover:opacity-90"
-                style="background-color:#FF6B35;" on:click={startNewModifier}>
-                + Add group
-              </button>
-            {/if}
-          </div>
-          {#if menuForm.modifiers.length > 0 && editingModifierIdx === null}
-            <div class="space-y-2 mb-3">
-              {#each menuForm.modifiers as mod, idx}
-                <div class="flex items-center gap-2 p-2.5 rounded-xl border border-border bg-card">
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium truncate">{mod.label}</p>
-                    <p class="text-xs text-muted-foreground">
-                      {mod.type === 'radio' ? 'Pick one' : 'Pick any'} · {mod.options.length} option{mod.options.length !== 1 ? 's' : ''}{mod.required ? ' · Required' : ''}
-                    </p>
-                  </div>
-                  <button class="p-1.5 hover:bg-muted rounded-lg text-muted-foreground" on:click={() => startEditModifier(idx)}><PencilSimpleIcon size={14}/></button>
-                  <button class="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-red-500" on:click={() => removeModifier(idx)}><TrashIcon size={14}/></button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-          {#if editingModifierIdx !== null}
-            <div class="border border-[#FF6B35]/30 bg-[#FF6B3504] rounded-xl p-3 space-y-3">
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="block text-[11px] font-semibold text-muted-foreground mb-1">Group label <span class="text-red-500">*</span></label>
-                  <input class="w-full border border-border rounded-lg px-2.5 py-1.5 bg-background text-foreground text-sm" bind:value={draftModifier.label} placeholder="e.g. Choose filling"/>
-                </div>
-                <div>
-                  <label class="block text-[11px] font-semibold text-muted-foreground mb-1">Selection type</label>
-                  <select class="w-full border border-border rounded-lg px-2.5 py-1.5 bg-background text-foreground text-sm" bind:value={draftModifier.type}>
-                    <option value="radio">Pick one only</option>
-                    <option value="multi">Pick any (multi)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <input type="checkbox" id="modRequired" bind:checked={draftModifier.required} class="rounded"/>
-                <label for="modRequired" class="text-sm font-medium cursor-pointer">Required (customer must choose)</label>
-              </div>
-              {#if draftModifier.options.length > 0}
-                <div class="space-y-1">
-                  {#each draftModifier.options as opt}
-                    <div class="flex items-center gap-2 text-sm px-2 py-1.5 bg-background rounded-lg border border-border">
-                      <span class="flex-1 truncate">{opt.name}</span>
-                      {#if opt.price !== 0}<span class="text-xs text-muted-foreground">{opt.price > 0 ? '+' : ''}Rs.{opt.price}</span>{/if}
-                      <button class="text-red-500 p-0.5 rounded" on:click={() => removeDraftOption(opt.id)}><XIcon size={13}/></button>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-              <div class="flex gap-2">
-                <input class="flex-1 border border-border rounded-lg px-2.5 py-1.5 bg-background text-foreground text-sm"
-                  bind:value={draftOption.name} placeholder="Option name" on:keydown={e => e.key === 'Enter' && addDraftOption()}/>
-                <div class="relative">
-                  <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Rs.</span>
-                  <input type="number" class="w-24 border border-border rounded-lg pl-8 pr-2 py-1.5 bg-background text-foreground text-sm" bind:value={draftOption.price} placeholder="0"/>
-                </div>
-                <button class="px-2.5 py-1.5 rounded-lg text-white text-xs font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={addDraftOption}>Add</button>
-              </div>
-              <p class="text-[11px] text-muted-foreground">Use negative price (e.g. -20) for cheaper variants.</p>
-              <div class="flex gap-2 pt-1">
-                <button class="flex-1 border border-border py-1.5 rounded-lg text-sm font-medium hover:bg-muted" on:click={() => editingModifierIdx = null}>Cancel</button>
-                <button class="flex-1 py-1.5 rounded-lg text-white text-sm font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={saveDraftModifier}>Save group</button>
-              </div>
-            </div>
-          {/if}
-        </div>
-      </div>
-      <div class="px-5 py-4 border-t border-border flex gap-2 flex-shrink-0">
-        <button class="flex-1 border border-border py-2 rounded-xl text-sm font-medium hover:bg-muted" on:click={() => showMenuForm = false}>Cancel</button>
-        <button class="flex-1 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50" style="background-color:#FF6B35;" disabled={savingMenuItem} on:click={saveMenuItem}>
-          {savingMenuItem ? 'Saving…' : editingMenuItem ? 'Save changes' : 'Add item'}
-        </button>
       </div>
     </div>
   </div>
@@ -1012,17 +717,8 @@
         <HighlightsSection userId={user.id} {isOwnProfile}/>
       </div>
 
-      <!-- ══════════════════════════════════════════════════════════════════
-           UNIFIED TAB BAR + CONTENT
-           Layout: on desktop with business profiles, the tab bar spans the
-           full width and the content below is split into a 60/40 grid.
-           The menu column is ALWAYS visible on desktop (not hidden behind a tab).
-           On mobile, Menu appears as a tab that replaces the left column.
-      ═══════════════════════════════════════════════════════════════════ -->
-
-      <!-- Tab bar — full width, all tabs in one row -->
+      <!-- ── TAB BAR ── -->
       <div class="flex items-center border-b border-border mb-0">
-        <!-- Posts tab -->
         <button
           class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
           style={activeTab === 'posts' ? 'border-color:#FF6B35;color:#FF6B35;' : 'border-color:transparent;color:var(--muted-foreground);'}
@@ -1031,7 +727,6 @@
           Posts{#if postsCount > 0}<span class="opacity-60 text-xs ml-1">{postsCount}</span>{/if}
         </button>
 
-        <!-- Recipes tab -->
         <button
           class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
           style={activeTab === 'recipes' ? 'border-color:#FF6B35;color:#FF6B35;' : 'border-color:transparent;color:var(--muted-foreground);'}
@@ -1040,7 +735,6 @@
           Recipes{#if recipes.length > 0}<span class="opacity-60 text-xs ml-1">{recipes.length}</span>{/if}
         </button>
 
-        <!-- Menu tab — mobile only (on desktop the menu is always in the sidebar column) -->
         {#if isBusiness}
           <button
             class="lg:hidden flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
@@ -1051,7 +745,6 @@
           </button>
         {/if}
 
-        <!-- Spacer + right-side CTA -->
         <div class="flex-1"></div>
         <div class="pr-1 flex-shrink-0">
           {#if isOwnProfile}
@@ -1066,15 +759,10 @@
         </div>
       </div>
 
-      <!-- Content area: CSS grid on desktop for true 60/40 column layout -->
-      <!--
-        On desktop + business: grid with two columns (posts/recipes | menu).
-        The columns start at the same vertical position — no header mismatch.
-        On mobile or non-business: single column.
-      -->
+      <!-- ── CONTENT AREA ── -->
       <div class="{isBusiness ? 'lg:grid lg:grid-cols-[1fr_280px]' : ''} lg:gap-6 items-start mt-5">
 
-        <!-- ── LEFT COLUMN: Posts / Recipes / Mobile Menu ── -->
+        <!-- LEFT COLUMN -->
         <div class="min-w-0">
 
           <!-- POSTS TAB -->
@@ -1094,7 +782,7 @@
                 {#each posts as post, i (post.id)}
                   <button
                     class="aspect-square bg-muted overflow-hidden relative group"
-                    on:click={() => openLightbox(i)}
+                    on:click={() => openPostModal(post.id, i)}
                   >
                     <img
                       src={pb.files.getUrl(post, post.image)}
@@ -1102,8 +790,12 @@
                       class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                     <div class="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 text-white text-sm font-semibold">
-                      <span class="flex items-center gap-1"><HeartIcon size={15} weight="fill"/>{postStats[post.id]?.likes || 0}</span>
-                      <span class="flex items-center gap-1"><ChatCircleIcon size={15} weight="fill"/>{postStats[post.id]?.comments || 0}</span>
+                      <span class="flex items-center gap-1">
+                        <HeartIcon size={15} weight="fill"/>{postStats[post.id]?.likes ?? 0}
+                      </span>
+                      <span class="flex items-center gap-1">
+                        <ChatCircleIcon size={15} weight="fill"/>{postStats[post.id]?.comments ?? 0}
+                      </span>
                     </div>
                   </button>
                 {/each}
@@ -1163,7 +855,7 @@
               </div>
             {/if}
 
-          <!-- MENU TAB (mobile only — the tab only appears on mobile for business) -->
+          <!-- MENU TAB (mobile only) -->
           {:else if activeTab === 'menu' && isBusiness}
             <div class="space-y-1">
               {#if menuCategories.length > 1}
@@ -1255,18 +947,10 @@
 
         </div><!-- end left column -->
 
-        <!-- ── RIGHT COLUMN: Menu sidebar — desktop only, business only ── -->
-        <!--
-          This column sits in the CSS grid alongside the posts/recipes column.
-          Both columns start at exactly the same y position (no card header offset).
-          The "Add item" button is in the tab bar's right CTA area (not here),
-          keeping this column purely about browsing/ordering.
-        -->
+        <!-- RIGHT COLUMN: Menu sidebar — desktop only, business only -->
         {#if isBusiness}
           <div class="hidden lg:block">
             <div class="sticky top-20 bg-card border border-border rounded-2xl overflow-hidden flex flex-col" style="max-height: calc(100vh - 120px);">
-
-              <!-- Column header — aligned with the tab bar bottom -->
               <div class="flex items-center justify-between px-3 py-2.5 border-b border-border flex-shrink-0">
                 <div>
                   <p class="text-sm font-bold">Menu</p>
@@ -1280,8 +964,6 @@
                   </button>
                 {/if}
               </div>
-
-              <!-- Category pills -->
               {#if menuCategories.length > 1}
                 <div class="flex gap-1 px-2 py-2 border-b border-border overflow-x-auto scrollbar-hide flex-shrink-0">
                   <button
@@ -1298,8 +980,6 @@
                   {/each}
                 </div>
               {/if}
-
-              <!-- Scrollable items -->
               <div class="flex-1 overflow-y-auto p-2 space-y-3">
                 {#if menuItems.length === 0}
                   <div class="flex flex-col items-center py-8 text-center">
@@ -1336,8 +1016,7 @@
                             {:else if item.isAvailable}
                               <div class="flex-shrink-0">
                                 {#if inCartQty === 0}
-                                  <button
-                                    class="px-2 py-1 rounded-lg text-white text-[11px] font-semibold hover:opacity-90"
+                                  <button class="px-2 py-1 rounded-lg text-white text-[11px] font-semibold hover:opacity-90"
                                     style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>
                                 {:else if hasMods}
                                   <div class="flex flex-col items-center gap-0.5">
@@ -1364,13 +1043,12 @@
                     </div>
                   {/each}
                 {/if}
-              </div><!-- end scrollable items -->
-
-            </div><!-- end sticky card -->
-          </div><!-- end right column -->
+              </div>
+            </div>
+          </div>
         {/if}
 
-      </div><!-- end grid content area -->
+      </div><!-- end grid -->
 
     </main>
   {:else}
@@ -1380,7 +1058,6 @@
   {/if}
 </div>
 
-<!-- Floating cart button -->
 {#if !isOwnProfile && $cartCount > 0}
   <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
     <button
@@ -1399,4 +1076,4 @@
   .scrollbar-hide::-webkit-scrollbar { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .animate-spin { animation: spin 1s linear infinite; }
-</style>s
+</style>
