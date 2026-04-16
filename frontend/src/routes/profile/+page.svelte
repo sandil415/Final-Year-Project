@@ -665,11 +665,8 @@
           </div>
 
           <div class="flex gap-5 text-sm mb-2 flex-wrap">
-            <span><strong>{postsCount}</strong> posts</span>
             <button class="hover:opacity-70"><strong>{followersCount}</strong> followers</button>
             <button class="hover:opacity-70"><strong>{followingCount}</strong> following</button>
-            {#if menuItems.length > 0}<span><strong>{menuItems.length}</strong> menu items</span>{/if}
-            {#if recipes.length > 0}<span><strong>{recipes.length}</strong> recipes</span>{/if}
           </div>
 
           <p class="text-sm text-muted-foreground leading-relaxed mb-3">{user.bio || 'No bio yet'}</p>

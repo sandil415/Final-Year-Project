@@ -1,11 +1,11 @@
 <script>
 import { goto } from "$app/navigation";
 import { page } from "$app/stores";
-import { BellIcon, ShoppingBagIcon } from "phosphor-svelte";
+import { BellIcon, ShoppingBagIcon, ArrowLeftIcon } from "phosphor-svelte";
 import { onMount, onDestroy } from "svelte";
 import pb from '$lib/pocketbase';
-import { Heart, MessageCircle, UserPlus, Bell, X, LayoutDashboard, Compass } from 'lucide-svelte';
-import { cartItems, cartCount } from '$lib/stores/cart';
+import { Heart, MessageCircle, UserPlus, Bell, X } from 'lucide-svelte';
+import { cartItems, cartCount, cartTotal } from '$lib/stores/cart';
 import { showCartDrawer } from '$lib/stores/ui';
 
 let mobileMenuOpen = false;
@@ -19,12 +19,11 @@ let unsubscribe = null;
 
   $: currentPath = $page.url.pathname;
   $: isBusiness = currentUser?.accountType === 'business';
+  $: isCheckoutPage = currentPath === '/checkout';
 
-  // Nav links swap based on account type
   $: navLinks = [
     { href: '/home', label: 'Home' },
     { href: '/search', label: 'Search' },
-    // Explore for personal, Dashboard for business
     isBusiness
       ? { href: '/business/dashboard', label: 'Dashboard', highlight: true }
       : { href: '/explore', label: 'Explore' },
@@ -155,21 +154,40 @@ let unsubscribe = null;
   }
 
   function closePanel() { notificationPanelOpen = false; }
+
+  function goToCheckout() {
+    cartPanelOpen = false;
+    goto('/checkout');
+  }
 </script>
 
 {#if notificationPanelOpen}
   <div class="fixed inset-0 z-40" on:click={closePanel} role="presentation"></div>
+{/if}
+{#if cartPanelOpen}
+  <div class="fixed inset-0 z-40" on:click={() => cartPanelOpen = false} role="presentation"></div>
 {/if}
 
 <nav class="sticky top-0 z-50 bg-background/95 backdrop-blur-sm border-b border-border">
   <div class="max-w-7xl mx-auto px-6 py-4">
     <div class="flex items-center justify-between">
 
-      <!-- Logo -->
-      <button class="flex flex-col items-start" on:click={() => goto('/home')}>
-        <h1 class="text-2xl font-bold tracking-tight text-foreground">FIESTRA</h1>
-        <span class="text-xs font-medium tracking-wider" style="color: #FF6B35;">Explore Nepali Cuisines with Us</span>
-      </button>
+      <!-- Left: back arrow (checkout page) or logo -->
+      <div class="flex items-center gap-3">
+        {#if isCheckoutPage}
+          <button
+            class="p-2 hover:bg-muted rounded-xl border border-border transition-colors"
+            on:click={() => history.back()}
+            aria-label="Back"
+          >
+            <ArrowLeftIcon size={18} />
+          </button>
+        {/if}
+        <button class="flex flex-col items-start" on:click={() => goto('/home')}>
+          <h1 class="text-2xl font-bold tracking-tight text-foreground">FIESTRA</h1>
+          <span class="text-xs font-medium tracking-wider" style="color: #FF6B35;">Explore Nepali Cuisines with Us</span>
+        </button>
+      </div>
 
       <!-- Desktop Nav -->
       <div class="hidden md:flex items-center gap-8">
@@ -179,9 +197,7 @@ let unsubscribe = null;
             class="text-sm font-medium transition-colors relative group {isActive(link.href) ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           >
             {#if link.highlight && isBusiness}
-              <!-- Dashboard gets special orange treatment -->
               <span class="flex items-center gap-1.5" style={isActive(link.href) ? 'color: #FF6B35;' : ''}>
-                
                 {link.label}
               </span>
             {:else}
@@ -214,6 +230,8 @@ let unsubscribe = null;
 
       <!-- Right Icons -->
       <div class="flex items-center gap-4">
+
+        <!-- Cart -->
         <div class="relative">
           <button
             class="relative p-2 hover:bg-secondary rounded-full transition-colors"
@@ -228,17 +246,19 @@ let unsubscribe = null;
           </button>
 
           {#if cartPanelOpen}
-            <div class="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-2rem)] bg-background border border-border rounded-2xl shadow-2xl z-40 overflow-hidden">
+            <div class="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-2rem)] bg-background border border-border rounded-2xl shadow-2xl z-50 overflow-hidden">
               <div class="px-5 py-3 border-b border-border flex items-center justify-between">
-                <span class="text-sm font-semibold">Cart</span>
+                <span class="text-sm font-semibold">Cart · {$cartCount} item{$cartCount !== 1 ? 's' : ''}</span>
                 <button class="p-1 hover:bg-secondary rounded-full" on:click={() => cartPanelOpen = false}>
                   <X class="w-4 h-4 text-muted-foreground" />
                 </button>
               </div>
+
               <div class="max-h-64 overflow-y-auto">
                 {#if $cartItems.length === 0}
-                  <div class="py-6 px-5 text-sm text-muted-foreground">
-                    Your cart is empty.
+                  <div class="py-8 px-5 text-center">
+                    <div class="text-3xl mb-2">🛒</div>
+                    <p class="text-sm text-muted-foreground">Your cart is empty.</p>
                   </div>
                 {:else}
                   <div class="py-3 px-4 space-y-2">
@@ -246,25 +266,34 @@ let unsubscribe = null;
                       <div class="flex items-center justify-between gap-3 text-sm">
                         <div class="flex-1 min-w-0">
                           <p class="font-medium truncate">{entry.item.name}</p>
+                          {#if entry.selectionLabel}
+                            <p class="text-[11px] text-muted-foreground truncate">{entry.selectionLabel}</p>
+                          {/if}
                           <p class="text-xs text-muted-foreground">× {entry.quantity}</p>
                         </div>
-                        <span class="text-xs font-semibold text-muted-foreground">
-                          Rs. {(entry.item.price * entry.quantity).toFixed(2)}
+                        <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">
+                          Rs. {((entry.effectivePrice ?? entry.item.price) * entry.quantity).toFixed(0)}
                         </span>
                       </div>
                     {/each}
                   </div>
                 {/if}
               </div>
+
               {#if $cartItems.length > 0}
-                <div class="px-5 py-3 border-t border-border flex items-center justify-between text-sm">
-                  <span class="text-muted-foreground">Items: {$cartCount}</span>
+                <div class="px-4 py-3 border-t border-border space-y-2">
+                  <!-- Subtotal row -->
+                  <div class="flex items-center justify-between text-sm">
+                    <span class="text-muted-foreground">Subtotal</span>
+                    <span class="font-bold">Rs. {$cartTotal.toFixed(2)}</span>
+                  </div>
+                  <!-- Checkout CTA -->
                   <button
-                    class="text-xs font-semibold px-3 py-1.5 rounded-lg text-white hover:opacity-90"
+                    class="w-full py-2.5 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-opacity"
                     style="background-color: #FF6B35;"
-                    on:click={() => { cartPanelOpen = false; showCartDrawer.set(true); }}
+                    on:click={goToCheckout}
                   >
-                    View details
+                    Checkout →
                   </button>
                 </div>
               {/if}
@@ -413,8 +442,21 @@ let unsubscribe = null;
           >
             <span class="text-xl font-light">+</span> Create
           </a>
+          {#if $cartCount > 0}
+            <button
+              class="px-5 py-3 rounded-full text-sm font-semibold border border-border hover:bg-muted"
+              on:click={() => { mobileMenuOpen = false; goto('/checkout'); }}
+            >
+              Checkout ({$cartCount} items) · Rs. {$cartTotal.toFixed(0)}
+            </button>
+          {/if}
         </div>
       </div>
     {/if}
   </div>
 </nav>
+
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .animate-spin { animation: spin 1s linear infinite; }
+</style>

@@ -11,9 +11,10 @@
     CheckCircleIcon,
     ShoppingBagIcon,
     XCircleIcon,
-    ArrowRightIcon,
     ChartBarIcon,
     WarningIcon,
+    CalendarIcon,
+    ArrowLeftIcon,
   } from 'phosphor-svelte';
 
   let user = null;
@@ -26,15 +27,17 @@
   let unsubscribe = null;
 
   const tabs = [
-    { key: 'pending',   label: 'Pending'   },
-    { key: 'confirmed', label: 'Confirmed' },
-    { key: 'preparing', label: 'Preparing' },
-    { key: 'ready',     label: 'Ready'     },
-    { key: 'delivered', label: 'Delivered' },
-    { key: 'cancelled', label: 'Cancelled' },
+    { key: 'scheduled',  label: 'Scheduled'  },
+    { key: 'pending',    label: 'Pending'    },
+    { key: 'confirmed',  label: 'Confirmed'  },
+    { key: 'preparing',  label: 'Preparing'  },
+    { key: 'ready',      label: 'Ready'      },
+    { key: 'delivered',  label: 'Delivered'  },
+    { key: 'cancelled',  label: 'Cancelled'  },
   ];
 
   const statusStyle = {
+    scheduled: { bg: '#EDE9FE', text: '#5B21B6', dot: '#8B5CF6' },
     pending:   { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
     confirmed: { bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
     preparing: { bg: '#EDE9FE', text: '#5B21B6', dot: '#8B5CF6' },
@@ -44,6 +47,7 @@
   };
 
   const nextStatus = {
+    scheduled: 'pending',
     pending:   'confirmed',
     confirmed: 'preparing',
     preparing: 'ready',
@@ -51,6 +55,7 @@
   };
 
   const nextLabel = {
+    scheduled: 'Accept',
     pending:   'Confirm',
     confirmed: 'Preparing',
     preparing: 'Mark Ready',
@@ -74,9 +79,7 @@
     });
   });
 
-  onDestroy(() => {
-    unsubscribe?.();
-  });
+  onDestroy(() => { unsubscribe?.(); });
 
   async function loadOrders() {
     try {
@@ -86,9 +89,7 @@
         expand: 'buyer'
       });
       orders = result;
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   }
 
   async function loadMenuCount() {
@@ -107,12 +108,10 @@
       orders = orders.map(o => o.id === order.id ? { ...o, status } : o);
       showToast(`Order marked as ${status}`);
     } catch (e) {
-      console.error('Order update failed:', e);
       showToast('Failed to update order', 'error');
     } finally {
       updatingOrderId = null;
     }
-
     try {
       await pb.collection('notifications').create({
         user: order.expand?.buyer?.id || order.buyer,
@@ -124,13 +123,12 @@
     } catch (_) {}
   }
 
-  async function cancelOrder(order) {
-    await updateOrderStatus(order, 'cancelled');
-  }
+  async function cancelOrder(order) { await updateOrderStatus(order, 'cancelled'); }
 
   $: filteredOrders = orders.filter(o => o.status === activeTab);
   $: pendingCount   = orders.filter(o => o.status === 'pending').length;
-  $: tabCounts      = tabs.reduce((acc, t) => {
+  $: scheduledCount = orders.filter(o => o.status === 'scheduled').length;
+  $: tabCounts = tabs.reduce((acc, t) => {
     acc[t.key] = orders.filter(o => o.status === t.key).length;
     return acc;
   }, {});
@@ -157,9 +155,24 @@
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
+  function formatScheduled(d) {
+    if (!d) return '—';
+    return new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
   function itemsSummary(items) {
     if (!items?.length) return '—';
     return items.map(i => `${i.quantity}× ${i.name}`).join(', ');
+  }
+
+  // Days until scheduled
+  function daysUntil(d) {
+    if (!d) return null;
+    const diff = new Date(d) - new Date();
+    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    if (days === 0) return 'today';
+    if (days === 1) return 'tomorrow';
+    return `in ${days} days`;
   }
 </script>
 
@@ -214,7 +227,6 @@
 
       <!-- ── STAT CARDS ── -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <!-- Pending -->
         <div class="bg-card border border-border rounded-2xl p-4">
           <div class="flex items-center justify-between mb-3">
             <span class="text-xs font-medium text-muted-foreground">Pending</span>
@@ -222,23 +234,22 @@
               <ClockIcon size={15} weight="duotone" style="color:#F59E0B;" />
             </div>
           </div>
-          <p class="text-2xl font-bold">{orders.filter(o => o.status === 'pending').length}</p>
+          <p class="text-2xl font-bold">{pendingCount}</p>
           <p class="text-xs text-muted-foreground mt-0.5">need action</p>
         </div>
 
-        <!-- Preparing -->
-        <div class="bg-card border border-border rounded-2xl p-4">
+        <!-- Scheduled -->
+        <div class="bg-card border border-border rounded-2xl p-4 {scheduledCount > 0 ? 'ring-1 ring-purple-300 dark:ring-purple-700' : ''}">
           <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-medium text-muted-foreground">Preparing</span>
+            <span class="text-xs font-medium text-muted-foreground">Scheduled</span>
             <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#EDE9FE20;">
-              <CookingPotIcon size={15} weight="duotone" style="color:#8B5CF6;" />
+              <CalendarIcon size={15} weight="duotone" style="color:#8B5CF6;" />
             </div>
           </div>
-          <p class="text-2xl font-bold">{orders.filter(o => o.status === 'preparing').length}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">in kitchen</p>
+          <p class="text-2xl font-bold">{scheduledCount}</p>
+          <p class="text-xs text-muted-foreground mt-0.5">upcoming</p>
         </div>
 
-        <!-- Delivered today -->
         <div class="bg-card border border-border rounded-2xl p-4">
           <div class="flex items-center justify-between mb-3">
             <span class="text-xs font-medium text-muted-foreground">Delivered Today</span>
@@ -250,7 +261,6 @@
           <p class="text-xs text-muted-foreground mt-0.5">completed</p>
         </div>
 
-        <!-- Today's revenue -->
         <div class="bg-card border border-border rounded-2xl p-4">
           <div class="flex items-center justify-between mb-3">
             <span class="text-xs font-medium text-muted-foreground">Today's Revenue</span>
@@ -272,15 +282,26 @@
             <h2 class="font-bold text-sm">Orders</h2>
             <span class="text-xs text-muted-foreground">{orders.length} total</span>
           </div>
-          {#if pendingCount > 0}
-            <span
-              class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold text-white animate-pulse"
-              style="background-color:#FF6B35;"
-            >
-              <ClockIcon size={11} weight="fill" />
-              {pendingCount} new
-            </span>
-          {/if}
+          <div class="flex items-center gap-2">
+            {#if scheduledCount > 0}
+              <span
+                class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold text-white"
+                style="background-color:#8B5CF6;"
+              >
+                <CalendarIcon size={11} weight="fill" />
+                {scheduledCount} scheduled
+              </span>
+            {/if}
+            {#if pendingCount > 0}
+              <span
+                class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold text-white animate-pulse"
+                style="background-color:#FF6B35;"
+              >
+                <ClockIcon size={11} weight="fill" />
+                {pendingCount} new
+              </span>
+            {/if}
+          </div>
         </div>
 
         <!-- Sticky tab bar -->
@@ -290,9 +311,10 @@
             <button
               class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex-shrink-0 whitespace-nowrap"
               style={activeTab === tab.key
-                ? 'background-color:#FF6B35;color:white;'
+                ? tab.key === 'scheduled'
+                  ? 'background-color:#8B5CF6;color:white;'
+                  : 'background-color:#FF6B35;color:white;'
                 : 'color:var(--muted-foreground);'}
-              class:hover:bg-muted={activeTab !== tab.key}
               on:click={() => activeTab = tab.key}
             >
               {tab.label}
@@ -303,7 +325,9 @@
                     ? 'background:rgba(255,255,255,0.25);color:white;'
                     : tab.key === 'pending'
                       ? 'background:#FF6B35;color:white;'
-                      : 'background:hsl(var(--muted));color:hsl(var(--muted-foreground));'}
+                      : tab.key === 'scheduled'
+                        ? 'background:#8B5CF6;color:white;'
+                        : 'background:hsl(var(--muted));color:hsl(var(--muted-foreground));'}
                 >
                   {count}
                 </span>
@@ -315,7 +339,6 @@
         <!-- Scrollable order list -->
         <div class="flex-1 overflow-y-auto">
           {#if loading}
-            <!-- Skeleton -->
             <div class="divide-y divide-border">
               {#each Array(5) as _}
                 <div class="flex items-center gap-3 px-4 py-3">
@@ -332,38 +355,48 @@
           {:else if filteredOrders.length === 0}
             <div class="flex flex-col items-center justify-center h-full py-12 text-center">
               <div class="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-3">
-                <ShoppingBagIcon size={22} weight="duotone" class="text-muted-foreground" />
+                {#if activeTab === 'scheduled'}
+                  <CalendarIcon size={22} weight="duotone" class="text-muted-foreground" />
+                {:else}
+                  <ShoppingBagIcon size={22} weight="duotone" class="text-muted-foreground" />
+                {/if}
               </div>
               <p class="font-medium text-sm text-foreground mb-1">No {activeTab} orders</p>
               <p class="text-xs text-muted-foreground">
-                {activeTab === 'pending' ? 'New orders will appear here' : 'Orders in this state will show here'}
+                {activeTab === 'scheduled' ? 'Scheduled orders from customers will appear here' : 'Orders in this state will show here'}
               </p>
             </div>
 
           {:else}
             <!-- Column headers -->
-            <div class="grid grid-cols-[1fr_auto] gap-2 px-4 py-2 border-b border-border bg-muted/30">
-              <div class="grid gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider" style="grid-template-columns: 28px 110px 1fr 72px;">
+            <div class="grid gap-2 px-4 py-2 border-b border-border bg-muted/30"
+              style="grid-template-columns: 1fr auto;">
+              <div class="grid gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider"
+                style="grid-template-columns: 20px 110px 1fr {activeTab === 'scheduled' ? '120px' : '72px'};">
                 <span></span>
                 <span>Customer</span>
                 <span>Items</span>
-                <span>Amount</span>
+                {#if activeTab === 'scheduled'}
+                  <span>Scheduled For</span>
+                {:else}
+                  <span>Amount</span>
+                {/if}
               </div>
               <span class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Actions</span>
             </div>
 
-            <!-- Order rows -->
             <div class="divide-y divide-border">
               {#each filteredOrders as order (order.id)}
                 {@const st = statusStyle[order.status] || statusStyle.pending}
                 {@const isUpdating = updatingOrderId === order.id}
 
                 <div
-                  class="grid grid-cols-[1fr_auto] gap-2 px-4 py-2.5 items-center hover:bg-muted/30 transition-colors"
+                  class="grid gap-2 px-4 py-2.5 items-center hover:bg-muted/30 transition-colors"
+                  style="grid-template-columns: 1fr auto;"
                   class:opacity-60={isUpdating}
                 >
-                  <!-- Left: order info -->
-                  <div class="grid gap-2 items-center min-w-0" style="grid-template-columns: 28px 110px 1fr 72px;">
+                  <div class="grid gap-2 items-center min-w-0"
+                    style="grid-template-columns: 20px 110px 1fr {activeTab === 'scheduled' ? '120px' : '72px'};">
 
                     <!-- Status dot -->
                     <div class="flex items-center justify-center">
@@ -388,24 +421,35 @@
                       {/if}
                     </div>
 
-                    <!-- Amount -->
-                    <div>
-                      <p class="text-xs font-bold text-foreground">Rs.{order.totalAmount?.toFixed(0)}</p>
-                      <span
-                        class="text-[9px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
-                        style="background:{st.bg};color:{st.text};"
-                      >
-                        {order.status}
-                      </span>
-                    </div>
+                    <!-- Amount or Scheduled time -->
+                    {#if activeTab === 'scheduled'}
+                      <div class="min-w-0">
+                        {#if order.scheduledAt}
+                          <p class="text-xs font-semibold" style="color:#8B5CF6;">{formatScheduled(order.scheduledAt)}</p>
+                          <p class="text-[10px] text-muted-foreground">{daysUntil(order.scheduledAt)}</p>
+                        {:else}
+                          <p class="text-[10px] text-muted-foreground">No date</p>
+                        {/if}
+                      </div>
+                    {:else}
+                      <div>
+                        <p class="text-xs font-bold text-foreground">Rs.{order.totalAmount?.toFixed(0)}</p>
+                        <span
+                          class="text-[9px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
+                          style="background:{st.bg};color:{st.text};"
+                        >
+                          {order.status}
+                        </span>
+                      </div>
+                    {/if}
                   </div>
 
-                  <!-- Right: action buttons -->
+                  <!-- Action buttons -->
                   <div class="flex items-center gap-1.5 flex-shrink-0">
                     {#if nextStatus[order.status]}
                       <button
                         class="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-50 whitespace-nowrap"
-                        style="background-color:#FF6B35;"
+                        style={order.status === 'scheduled' ? 'background-color:#8B5CF6;' : 'background-color:#FF6B35;'}
                         disabled={isUpdating}
                         on:click={() => updateOrderStatus(order, nextStatus[order.status])}
                       >
@@ -432,7 +476,7 @@
               {/each}
             </div>
 
-            <!-- Footer row count -->
+            <!-- Footer -->
             <div class="px-4 py-2.5 border-t border-border bg-muted/20 flex items-center justify-between">
               <span class="text-[11px] text-muted-foreground">
                 {filteredOrders.length} {activeTab} order{filteredOrders.length !== 1 ? 's' : ''}
@@ -440,6 +484,11 @@
               {#if activeTab === 'delivered'}
                 <span class="text-[11px] font-semibold" style="color:#FF6B35;">
                   Total: Rs.{filteredOrders.reduce((s, o) => s + (o.totalAmount || 0), 0).toFixed(0)}
+                </span>
+              {/if}
+              {#if activeTab === 'scheduled' && filteredOrders.length > 0}
+                <span class="text-[11px] font-semibold" style="color:#8B5CF6;">
+                  Value: Rs.{filteredOrders.reduce((s, o) => s + (o.totalAmount || 0), 0).toFixed(0)}
                 </span>
               {/if}
             </div>
@@ -454,25 +503,12 @@
 <style>
   .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
   .scrollbar-hide::-webkit-scrollbar { display: none; }
-
   .skeleton {
-    background: linear-gradient(
-      90deg,
-      hsl(var(--muted)) 25%,
-      hsl(var(--secondary)) 50%,
-      hsl(var(--muted)) 75%
-    );
+    background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--secondary)) 50%, hsl(var(--muted)) 75%);
     background-size: 200% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
   }
-  @keyframes shimmer {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-  }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
   .animate-pulse { animation: pulse 2s ease-in-out infinite; }
 </style>

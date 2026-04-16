@@ -1,23 +1,13 @@
 <script>
-  /**
-   * -----------------------------
-   * Imports
-   * -----------------------------
-   */
-  import Sidebar from '$lib/components/Sidebar.svelte';
   import pb from '$lib/pocketbase';
   import { onMount, onDestroy } from 'svelte';
   import { requireAuth } from '$lib/auth';
   import { goto } from '$app/navigation';
-
-  // Icons
   import { Heart, MessageCircle, UserPlus, Bell } from 'lucide-svelte';
 
   /**
-   * -----------------------------
    * State
-   * -----------------------------
-   */
+
   let notifications = [];      // All loaded notifications
   let loading = true;          // Loading state for UI
   let currentUser = null;      // Logged-in user model

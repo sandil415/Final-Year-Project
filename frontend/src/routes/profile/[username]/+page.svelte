@@ -1,15 +1,6 @@
-<!-- 
-  src/routes/profile/[username]/+page.svelte
-
-  Dynamic route for /profile/[username].
-  This is intentionally kept in sync with /profile/+page.svelte.
-  The only structural difference: $page.params.username is always
-  defined here (never falls back to currentUser.username for own profile
-  detection — that logic still works because we compare the param value).
--->
 <script>
   import pb from '$lib/pocketbase';
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import { page } from '$app/stores';
@@ -24,17 +15,16 @@
     CookingPotIcon, TruckIcon, ForkKnifeIcon, PhoneIcon,
     MapPinIcon, ClockIcon, ShoppingCartIcon, MinusIcon, PlusIcon,
     XIcon, BookOpenTextIcon, PencilSimpleIcon, TrashIcon,
-    CaretUpIcon, CaretDownIcon, ToggleLeftIcon, ToggleRightIcon,
+    ToggleLeftIcon, ToggleRightIcon,
     CheckCircleIcon, WarningCircleIcon,
     SignOutIcon,
   } from 'phosphor-svelte';
   import {
-    cart, cartCount, cartTotal, cartBySeller, checkoutState,
+    cart, cartCount, cartTotal,
     addItem as addCartItem, removeItem as removeCartItem,
-    removeSellerItems, cacheSellerRecord, initCheckout, setCheckoutField,
+    cacheSellerRecord, initCheckout,
     computeEffectivePrice,
   } from '$lib/stores/cart';
-  import { showCartDrawer } from '$lib/stores/ui';
 
   // ── Core state ────────────────────────────────────────────────────────────────
   let user = null, currentUser = null, loading = true;
@@ -44,20 +34,12 @@
   // Posts
   let posts = [], postsCount = 0, postStats = {};
 
-  // PostModal — replaces lightbox
-  let selectedPostId = null;
-  let selectedPostIndex = null;
+  // PostModal
+  let selectedPostId = null, selectedPostIndex = null;
 
-  function openPostModal(postId, index) {
-    selectedPostId = postId;
-    selectedPostIndex = index;
-  }
-  function closePostModal() {
-    selectedPostId = null;
-    selectedPostIndex = null;
-  }
+  function openPostModal(postId, index) { selectedPostId = postId; selectedPostIndex = index; }
+  function closePostModal() { selectedPostId = null; selectedPostIndex = null; }
 
-  // Keeps grid stats in sync when user likes/unlikes inside the modal
   function onLikeToggled(postId, delta) {
     postStats = {
       ...postStats,
@@ -70,11 +52,9 @@
 
   // Menu
   let menuItems = [], menuLoaded = false, activeCategory = null;
-
-  // Menu item form — uses MenuItemForm component
   let showMenuForm = false, editingMenuItem = null;
 
-  // Modifier selection modal (customer)
+  // Modifier modal
   let showModModal = false, modModalItem = null, modSelections = {};
 
   // Recipes
@@ -82,11 +62,8 @@
   let showEditor = false, editingRecipe = null, viewingRecipe = null;
   let recipeTitle = '', recipeTags = '', recipeCoverPreview = null, recipeBlocks = [];
 
-  // Active tab
+  // Tab
   let activeTab = 'posts';
-
-  // Cart
-  let showCart = false, expandedSeller = null;
 
   // Toast
   let toast = null;
@@ -100,7 +77,7 @@
   onMount(async () => {
     requireAuth();
     currentUser = pb.authStore.record ?? pb.authStore.model;
-    const uname = $page.params.username; // always defined on [username] route
+    const uname = $page.params.username;
     isOwnProfile = uname === currentUser.username;
     if (isOwnProfile) { user = currentUser; loading = false; }
     else await loadProfile(uname);
@@ -138,33 +115,20 @@
     } catch (_) {}
   }
 
-  // ── FIX: batch stat fetching — 2 requests total instead of N×2 ───────────────
-  // The old approach fired .then() callbacks in a loop and reassigned
-  // postStats = postStats, which Svelte doesn't reliably react to.
-  // This approach awaits one OR-filter query for all likes and one for all
-  // comments, then builds the map synchronously before assigning once.
   async function loadPosts() {
     try {
-      const r = await pb.collection('posts').getList(1, 50, {
-        filter: `user = "${user.id}"`,
-        sort: '-created',
-      });
-      posts = r.items;
-      postsCount = r.totalItems;
-
-      if (posts.length === 0) return;
-
+      const r = await pb.collection('posts').getList(1, 50, { filter: `user = "${user.id}"`, sort: '-created' });
+      posts = r.items; postsCount = r.totalItems;
+      if (!posts.length) return;
       const idFilter = posts.map(p => `post = "${p.id}"`).join(' || ');
       const [allLikes, allComments] = await Promise.all([
         pb.collection('likes').getFullList({ filter: idFilter, fields: 'post' }),
         pb.collection('comments').getFullList({ filter: idFilter, fields: 'post' }),
       ]);
-
       const stats = {};
       for (const p of posts) stats[p.id] = { likes: 0, comments: 0 };
-      for (const l of allLikes)    stats[l.post].likes++;
+      for (const l of allLikes) stats[l.post].likes++;
       for (const c of allComments) stats[c.post].comments++;
-      // Single assignment — Svelte detects the new object reference correctly
       postStats = stats;
     } catch (_) { posts = []; }
   }
@@ -180,23 +144,16 @@
 
   async function loadRecipes() {
     try {
-      const r = await pb.collection('recipes').getList(1, 50, {
-        filter: `user = "${user.id}"`, sort: '-created',
-      });
+      const r = await pb.collection('recipes').getList(1, 50, { filter: `user = "${user.id}"`, sort: '-created' });
       recipes = r.items;
     } catch (_) { recipes = []; }
   }
 
   // ── Post helpers ──────────────────────────────────────────────────────────────
-  function handlePostDeleted(id) {
-    posts = posts.filter(p => p.id !== id);
-    postsCount = Math.max(0, postsCount - 1);
-    closePostModal();
-  }
-
+  function handlePostDeleted(id) { posts = posts.filter(p => p.id !== id); postsCount = Math.max(0, postsCount - 1); closePostModal(); }
   function logout() { pb.authStore.clear(); goto('/auth/login'); }
 
-  // ── Menu form handlers (delegated to MenuItemForm component) ──────────────────
+  // ── Menu form ─────────────────────────────────────────────────────────────────
   function openNewMenuItem() { editingMenuItem = null; showMenuForm = true; }
   function openEditMenuItem(item) { editingMenuItem = item; showMenuForm = true; }
   function handleMenuFormClose() { showMenuForm = false; editingMenuItem = null; }
@@ -204,45 +161,42 @@
   function handleMenuItemSaved(savedItem) {
     if (editingMenuItem) {
       menuItems = menuItems.map(m => m.id === savedItem.id ? savedItem : m);
-      showToast('Menu item updated ✓');
+      showToast('Menu item updated');
     } else {
       menuItems = [savedItem, ...menuItems];
       if (!activeCategory) activeCategory = savedItem.category || 'Other';
-      showToast('Menu item added ✓');
+      showToast('Menu item added');
     }
-    showMenuForm = false;
-    editingMenuItem = null;
+    showMenuForm = false; editingMenuItem = null;
   }
 
   async function deleteMenuItem(item) {
-    if (!confirm(`Delete "${item.name}" from menu?`)) return;
-    try { await pb.collection('menuItems').delete(item.id); menuItems = menuItems.filter(m => m.id !== item.id); showToast('Menu item deleted'); }
-    catch (_) { showToast('Failed to delete', 'error'); }
+    if (!confirm(`Delete "${item.name}"?`)) return;
+    try { await pb.collection('menuItems').delete(item.id); menuItems = menuItems.filter(m => m.id !== item.id); showToast('Deleted'); }
+    catch (_) { showToast('Failed', 'error'); }
   }
 
   async function toggleMenuAvailability(item) {
     try {
       const updated = await pb.collection('menuItems').update(item.id, { isAvailable: !item.isAvailable });
       menuItems = menuItems.map(m => m.id === item.id ? updated : m);
-    } catch (_) { showToast('Failed to update', 'error'); }
+    } catch (_) { showToast('Failed', 'error'); }
   }
 
-  // ── Modifier selection modal (customer) ───────────────────────────────────────
-  function openModModal(item) {
-    modModalItem = item; modSelections = {};
-    const mods = parseMods(item);
-    for (const mod of mods) {
-      if (mod.type === 'radio' && mod.required && mod.options.length) modSelections[mod.id] = mod.options[0].id;
-    }
-    showModModal = true;
-  }
-  function closeModModal() { showModModal = false; modModalItem = null; modSelections = {}; }
-
+  // ── Modifier modal ────────────────────────────────────────────────────────────
   function parseMods(item) {
     if (!item?.modifiers) return [];
     try { return typeof item.modifiers === 'string' ? JSON.parse(item.modifiers) : item.modifiers; }
     catch (_) { return []; }
   }
+
+  function openModModal(item) {
+    modModalItem = item; modSelections = {};
+    for (const mod of parseMods(item))
+      if (mod.type === 'radio' && mod.required && mod.options.length) modSelections[mod.id] = mod.options[0].id;
+    showModModal = true;
+  }
+  function closeModModal() { showModModal = false; modModalItem = null; modSelections = {}; }
 
   function toggleModOption(modId, optId, type) {
     if (type === 'radio') {
@@ -257,8 +211,7 @@
 
   function modIsChosen(modId, optId, type) {
     const sel = modSelections[modId];
-    if (type === 'radio') return sel === optId;
-    return Array.isArray(sel) && sel.includes(optId);
+    return type === 'radio' ? sel === optId : Array.isArray(sel) && sel.includes(optId);
   }
 
   $: modModalMods  = modModalItem ? parseMods(modModalItem) : [];
@@ -269,48 +222,23 @@
     if (!modModalItem || !modModalValid) return;
     addCartItem(modModalItem, 1, modSelections, parseMods(modModalItem));
     initCheckout(modModalItem.seller);
-    showToast(`${modModalItem.name} added to cart`);
+    showToast(`${modModalItem.name} added`);
     closeModModal();
   }
 
-  // ── Cart helpers ──────────────────────────────────────────────────────────────
+  // ── Cart helpers (store mutations only — checkout is at /checkout) ────────────
   function handleAddToCart(item) {
-    const mods = parseMods(item);
-    if (mods.length > 0) { openModModal(item); }
-    else { addCartItem(item, 1, {}, []); initCheckout(item.seller); showToast(`${item.name} added to cart`); }
+    if (parseMods(item).length) { openModModal(item); return; }
+    addCartItem(item, 1, {}, []);
+    initCheckout(item.seller);
+    showToast(`${item.name} added`);
   }
-  function removeFromCart(lineKey) { removeCartItem(lineKey, 1); }
+
   function getItemCartLines(itemId) {
-    return Object.entries($cart).filter(([k, e]) => e.item?.id === itemId).map(([k, e]) => ({ key: k, ...e }));
+    return Object.entries($cart).filter(([, e]) => e.item?.id === itemId).map(([k, e]) => ({ key: k, ...e }));
   }
   function totalQtyInCart(itemId) { return getItemCartLines(itemId).reduce((s, e) => s + e.quantity, 0); }
-
-  async function placeOrder(group) {
-    const sid = group.sellerId;
-    const addr = $checkoutState[sid]?.address?.trim();
-    if (!addr) { showToast('Enter a delivery address', 'error'); return; }
-    setCheckoutField(sid, 'placing', true);
-    try {
-      await pb.collection('orders').create({
-        buyer: currentUser.id, seller: sid,
-        items: group.entries.map(e => ({
-          menuItemId: e.item.id, name: e.item.name,
-          basePrice: e.item.price, effectivePrice: e.effectivePrice ?? e.item.price,
-          quantity: e.quantity, selectionLabel: e.selectionLabel || '', selections: e.selections || {},
-        })),
-        totalAmount: group.subtotal, status: 'pending',
-        deliveryAddress: addr, notes: $checkoutState[sid].notes || '',
-      });
-      pb.collection('notifications').create({
-        user: sid, triggeredBy: currentUser.id, type: 'message',
-        message: `${currentUser.username} placed a new order worth Rs. ${group.subtotal.toFixed(2)}.`, read: false,
-      }).catch(() => {});
-      removeSellerItems(sid);
-      showToast(`Order placed with ${group.sellerName}! ✓`);
-      if ($cartBySeller.length === 0) showCart = false;
-    } catch (err) { showToast(err.message || 'Failed', 'error'); }
-    finally { setCheckoutField(sid, 'placing', false); }
-  }
+  function decrementItem(itemId) { const lines = getItemCartLines(itemId); if (lines.length) removeCartItem(lines[0].key, 1); }
 
   // ── Follow / Message ──────────────────────────────────────────────────────────
   async function toggleFollow() {
@@ -325,10 +253,7 @@
         const f = await pb.collection('follows').create({ follower: currentUser.id, following: user.id });
         isFollowing = true; followRecordId = f.id; followersCount++;
         showToast(`Following ${user.username}`);
-        pb.collection('notifications').create({
-          user: user.id, triggeredBy: currentUser.id, type: 'follow',
-          message: `${currentUser.username} started following you.`, read: false,
-        }).catch(() => {});
+        pb.collection('notifications').create({ user: user.id, triggeredBy: currentUser.id, type: 'follow', message: `${currentUser.username} started following you.`, read: false }).catch(() => {});
       } catch (_) {}
     }
   }
@@ -337,15 +262,11 @@
     const me = pb.authStore.record ?? pb.authStore.model;
     if (!me?.id || !user?.id || me.id === user.id) return;
     try {
-      const ex = await pb.collection('conversations').getFirstListItem(
-        `participants?="${me.id}"&&participants?="${user.id}"`
-      );
+      const ex = await pb.collection('conversations').getFirstListItem(`participants?="${me.id}"&&participants?="${user.id}"`);
       goto(`/messages/${ex.id}`);
     } catch (err) {
       if (err?.status === 404) {
-        const c = await pb.collection('conversations').create({
-          participants: [me.id, user.id], lastMessage: '', lastMessageTime: new Date().toISOString(),
-        });
+        const c = await pb.collection('conversations').create({ participants: [me.id, user.id], lastMessage: '', lastMessageTime: new Date().toISOString() });
         goto(`/messages/${c.id}`);
       }
     }
@@ -374,14 +295,14 @@
       if (editingRecipe) {
         const saved = await pb.collection('recipes').update(editingRecipe.id, fd);
         recipes = recipes.map(r => r.id === saved.id ? saved : r);
-        showToast('Recipe updated ✓');
+        showToast('Recipe updated');
       } else {
         const saved = await pb.collection('recipes').create(fd);
         recipes = [saved, ...recipes];
-        showToast('Recipe published ✓');
+        showToast('Recipe published');
       }
       showEditor = false;
-    } catch (err) { showToast(err.message || 'Failed to save', 'error'); throw err; }
+    } catch (err) { showToast(err.message || 'Failed', 'error'); throw err; }
   }
 
   async function deleteRecipe(recipe) {
@@ -398,18 +319,12 @@
   $: isBusiness    = user?.accountType === 'business';
   $: BizIcon       = bizIcons[user?.businessType] || StorefrontIcon;
   $: groupedMenu   = menuItems.reduce((acc, item) => {
-    const cat = item.category || 'Other';
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(item);
-    return acc;
+    const cat = item.category || 'Other'; if (!acc[cat]) acc[cat] = []; acc[cat].push(item); return acc;
   }, {});
   $: menuCategories    = Object.keys(groupedMenu);
-  $: filteredMenuItems = activeCategory && groupedMenu[activeCategory]
-    ? { [activeCategory]: groupedMenu[activeCategory] }
-    : groupedMenu;
+  $: filteredMenuItems = activeCategory && groupedMenu[activeCategory] ? { [activeCategory]: groupedMenu[activeCategory] } : groupedMenu;
 </script>
 
-<!-- ════════ TOAST ════════════════════════════════════════════════════════════ -->
 {#if toast}
   <div class="fixed top-5 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2.5 px-5 py-3 rounded-xl shadow-2xl text-sm font-semibold text-white pointer-events-none"
     style={toast.type === 'error' ? 'background-color:#EF4444;' : 'background-color:#16a34a;'}>
@@ -418,29 +333,14 @@
   </div>
 {/if}
 
-<!-- ════════ POST MODAL ════════════════════════════════════════════════════════ -->
 {#if selectedPostId}
-  <PostModal
-    postId={selectedPostId}
-    posts={posts}
-    initialIndex={selectedPostIndex}
-    onClose={closePostModal}
-    onDelete={handlePostDeleted}
-    onLikeToggled={onLikeToggled}
-  />
+  <PostModal postId={selectedPostId} posts={posts} initialIndex={selectedPostIndex} onClose={closePostModal} onDelete={handlePostDeleted} onLikeToggled={onLikeToggled}/>
 {/if}
 
-<!-- ════════ MENU ITEM FORM (shared component) ═══════════════════════════════ -->
 {#if showMenuForm && user}
-  <MenuItemForm
-    editingItem={editingMenuItem}
-    userId={user.id}
-    onSave={handleMenuItemSaved}
-    onClose={handleMenuFormClose}
-  />
+  <MenuItemForm editingItem={editingMenuItem} userId={user.id} onSave={handleMenuItemSaved} onClose={handleMenuFormClose}/>
 {/if}
 
-<!-- ════════ MODIFIER SELECTION MODAL (customer) ═════════════════════════════ -->
 {#if showModModal && modModalItem}
   <div class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 pt-20 sm:pt-4 overflow-y-auto" on:click|self={closeModModal}>
     <div class="bg-background border border-border rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden my-auto" style="max-height: calc(100vh - 80px);">
@@ -453,27 +353,20 @@
           <div>
             <div class="flex items-center justify-between mb-2">
               <p class="text-sm font-semibold">{mod.label}</p>
-              <span class="text-[11px] font-medium px-2 py-0.5 rounded-full {mod.required ? 'text-white' : 'text-muted-foreground bg-muted'}"
-                style={mod.required ? 'background-color:#FF6B35;' : ''}>
+              <span class="text-[11px] font-medium px-2 py-0.5 rounded-full {mod.required ? 'text-white' : 'text-muted-foreground bg-muted'}" style={mod.required ? 'background-color:#FF6B35;' : ''}>
                 {mod.required ? 'Required' : mod.type === 'radio' ? 'Pick one' : 'Optional'}
               </span>
             </div>
             <div class="space-y-2">
               {#each mod.options as opt}
                 {@const chosen = modIsChosen(mod.id, opt.id, mod.type)}
-                <button
-                  class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all text-left
-                    {chosen ? 'border-[#FF6B35] bg-[#FF6B3508]' : 'border-border hover:bg-muted/40'}"
-                  on:click={() => toggleModOption(mod.id, opt.id, mod.type)}
-                >
-                  <div class="flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center
-                    {chosen ? 'border-[#FF6B35] bg-[#FF6B35]' : 'border-border'}">
+                <button class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all text-left {chosen ? 'border-[#FF6B35] bg-[#FF6B3508]' : 'border-border hover:bg-muted/40'}"
+                  on:click={() => toggleModOption(mod.id, opt.id, mod.type)}>
+                  <div class="flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center {chosen ? 'border-[#FF6B35] bg-[#FF6B35]' : 'border-border'}">
                     {#if chosen}<div class="w-1.5 h-1.5 rounded-full bg-white"></div>{/if}
                   </div>
                   <span class="flex-1 text-sm">{opt.name}</span>
-                  {#if opt.price !== 0}
-                    <span class="text-xs font-medium text-muted-foreground">{opt.price > 0 ? '+' : ''}Rs. {opt.price}</span>
-                  {/if}
+                  {#if opt.price !== 0}<span class="text-xs font-medium text-muted-foreground">{opt.price > 0 ? '+' : ''}Rs. {opt.price}</span>{/if}
                 </button>
               {/each}
             </div>
@@ -482,14 +375,12 @@
       </div>
       <div class="flex items-center justify-between gap-3 px-5 py-4 border-t border-border flex-shrink-0">
         <div><p class="text-xs text-muted-foreground">Total</p><p class="text-lg font-bold">Rs. {modModalTotal.toFixed(0)}</p></div>
-        <button class="flex-1 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-          style="background-color:#FF6B35;" disabled={!modModalValid} on:click={confirmModAdd}>Add to cart</button>
+        <button class="flex-1 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color:#FF6B35;" disabled={!modModalValid} on:click={confirmModAdd}>Add to cart</button>
       </div>
     </div>
   </div>
 {/if}
 
-<!-- ════════ RECIPE EDITOR / VIEW ═════════════════════════════════════════════ -->
 {#if showEditor}
   <RecipeEditor {editingRecipe} bind:recipeTitle bind:recipeTags bind:recipeCoverPreview bind:recipeBlocks onSave={handleSave} onClose={() => showEditor = false}/>
 {/if}
@@ -499,72 +390,6 @@
     onDelete={() => { const r = viewingRecipe; viewingRecipe = null; deleteRecipe(r); }}/>
 {/if}
 
-<!-- ════════ CART DRAWER ══════════════════════════════════════════════════════ -->
-{#if showCart || $showCartDrawer}
-  <div class="fixed inset-0 z-50 flex">
-    <div class="flex-1 bg-black/50 backdrop-blur-sm" on:click={() => { showCart = false; showCartDrawer.set(false); }} role="presentation"></div>
-    <div class="w-full max-w-sm bg-background border-l border-border flex flex-col shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-border flex items-center justify-between flex-shrink-0">
-        <h2 class="font-bold">Cart · {$cartCount} item{$cartCount !== 1 ? 's' : ''}</h2>
-        <button class="p-2 hover:bg-muted rounded-full" on:click={() => { showCart = false; showCartDrawer.set(false); }}><XIcon size={18}/></button>
-      </div>
-      <div class="flex-1 overflow-y-auto">
-        {#each $cartBySeller as group (group.sellerId)}
-          {@const co = $checkoutState[group.sellerId] || {}}
-          {@const expanded = expandedSeller === group.sellerId}
-          <div class="border-b border-border">
-            <button class="w-full flex items-center gap-3 px-5 py-4 hover:bg-muted/40 text-left transition-colors"
-              on:click={() => expandedSeller = expanded ? null : group.sellerId}>
-              <div class="w-9 h-9 rounded-full text-white text-sm font-bold flex items-center justify-center flex-shrink-0" style="background-color:#FF6B35;">{group.sellerName.charAt(0).toUpperCase()}</div>
-              <div class="flex-1 min-w-0"><p class="font-semibold text-sm truncate">{group.sellerName}</p><p class="text-xs text-muted-foreground">{group.entries.length} item{group.entries.length !== 1 ? 's' : ''} · Rs. {group.subtotal.toFixed(2)}</p></div>
-              {#if expanded}<CaretUpIcon size={16} class="flex-shrink-0 text-muted-foreground"/>{:else}<CaretDownIcon size={16} class="flex-shrink-0 text-muted-foreground"/>{/if}
-            </button>
-            {#if expanded}
-              <div class="px-4 pb-4 space-y-3">
-                {#each group.entries as entry}
-                  <div class="flex items-start gap-3 p-2.5 bg-card border border-border rounded-xl">
-                    <div class="flex-1 min-w-0">
-                      <p class="text-sm font-medium truncate">{entry.item.name}</p>
-                      {#if entry.selectionLabel}<p class="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">{entry.selectionLabel}</p>{/if}
-                      <p class="text-xs text-muted-foreground">Rs. {(entry.effectivePrice ?? entry.item.price).toFixed(0)} × {entry.quantity} = Rs. {((entry.effectivePrice ?? entry.item.price) * entry.quantity).toFixed(0)}</p>
-                    </div>
-                    <div class="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
-                      <button class="w-6 h-6 rounded-full border border-border flex items-center justify-center hover:bg-muted"
-                        on:click={() => removeFromCart(Object.entries($cart).find(([k, e]) => e === entry)?.[0] || entry.item.id)}><MinusIcon size={12}/></button>
-                      <span class="text-sm font-semibold w-4 text-center">{entry.quantity}</span>
-                      <button class="w-6 h-6 rounded-full text-white flex items-center justify-center" style="background-color:#FF6B35;"
-                        on:click={() => handleAddToCart(entry.item)}><PlusIcon size={12}/></button>
-                    </div>
-                  </div>
-                {/each}
-                <input class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm"
-                  value={co.address || ''} on:input={e => setCheckoutField(group.sellerId, 'address', e.target.value)} placeholder="Delivery address *"/>
-                <textarea rows="2" class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm resize-none"
-                  value={co.notes || ''} on:input={e => setCheckoutField(group.sellerId, 'notes', e.target.value)} placeholder="Notes / special requests"/>
-                <div class="flex justify-between text-sm py-1"><span class="text-muted-foreground">Subtotal</span><span class="font-bold">Rs. {group.subtotal.toFixed(2)}</span></div>
-                <div class="flex gap-2">
-                  <button class="p-2 border border-border rounded-xl hover:bg-muted text-muted-foreground" on:click={() => removeSellerItems(group.sellerId)}><TrashIcon size={16}/></button>
-                  <button class="flex-1 py-2.5 rounded-xl text-white font-semibold text-sm hover:opacity-90 disabled:opacity-50"
-                    style="background-color:#FF6B35;" disabled={co.placing} on:click={() => placeOrder(group)}>
-                    {co.placing ? 'Placing…' : `Order from ${group.sellerName}`}
-                  </button>
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/each}
-        {#if $cartBySeller.length === 0}
-          <div class="flex flex-col items-center py-20 text-center px-8"><ShoppingCartIcon size={40} weight="duotone" class="text-muted-foreground mb-3"/><p class="font-semibold">Cart is empty</p></div>
-        {/if}
-      </div>
-      {#if $cartBySeller.length > 0}
-        <div class="px-5 py-4 border-t border-border flex-shrink-0"><div class="flex justify-between text-sm font-bold"><span>Grand total</span><span>Rs. {$cartTotal.toFixed(2)}</span></div></div>
-      {/if}
-    </div>
-  </div>
-{/if}
-
-<!-- ══════════════════════════════════════ PAGE ══════════════════════════════ -->
 <div class="min-h-screen bg-background text-foreground">
   <Header/>
 
@@ -576,7 +401,7 @@
   {:else if user}
     <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
 
-      <!-- ── PROFILE HEADER ── -->
+      <!-- PROFILE HEADER -->
       <div class="flex flex-col sm:flex-row gap-6 items-start mb-6 pb-6 border-b border-border">
         <div class="relative flex-shrink-0">
           <img src={user.avatar ? pb.files.getUrl(user, user.avatar) : '/images/profilePlaceholder.jpg'} alt={user.username} class="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover ring-2 ring-border"/>
@@ -597,11 +422,9 @@
             {/if}
           </div>
           <div class="flex gap-5 text-sm mb-2 flex-wrap">
-            <span><strong>{postsCount}</strong> posts</span>
-            <button class="hover:opacity-70"><strong>{followersCount}</strong> followers</button>
-            <button class="hover:opacity-70"><strong>{followingCount}</strong> following</button>
-            {#if menuItems.length > 0}<span><strong>{menuItems.length}</strong> menu items</span>{/if}
-            {#if recipes.length > 0}<span><strong>{recipes.length}</strong> recipes</span>{/if}
+            <span><strong>{postsCount}</strong> Posts</span>
+            <button class="hover:opacity-70"><strong>{followersCount}</strong> Followers</button>
+            <button class="hover:opacity-70"><strong>{followingCount}</strong> Following</button>
           </div>
           <p class="text-sm text-muted-foreground leading-relaxed mb-3">{user.bio || 'No bio yet'}</p>
           {#if isBusiness && (user.businessPhone || user.businessAddress)}
@@ -630,32 +453,26 @@
         </div>
       </div>
 
-      <!-- ── HIGHLIGHTS ── -->
+      <!-- HIGHLIGHTS -->
       <div class="mb-4"><HighlightsSection userId={user.id} {isOwnProfile}/></div>
 
-      <!-- ── TAB BAR ── -->
+      <!-- TAB BAR -->
       <div class="flex items-center border-b border-border mb-0">
-        <button
-          class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
+        <button class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
           style={activeTab === 'posts' ? 'border-color:#FF6B35;color:#FF6B35;' : 'border-color:transparent;color:var(--muted-foreground);'}
-          on:click={() => activeTab = 'posts'}
-        >
-          Posts{#if postsCount > 0}<span class="opacity-60 text-xs ml-1">{postsCount}</span>{/if}
+          on:click={() => activeTab = 'posts'}>
+          Posts{#if postsCount > 0}<span class="opacity-60 text-xs ml-0.5">{postsCount}</span>{/if}
         </button>
-        <button
-          class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
+        <button class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
           style={activeTab === 'recipes' ? 'border-color:#FF6B35;color:#FF6B35;' : 'border-color:transparent;color:var(--muted-foreground);'}
-          on:click={() => activeTab = 'recipes'}
-        >
-          Recipes{#if recipes.length > 0}<span class="opacity-60 text-xs ml-1">{recipes.length}</span>{/if}
+          on:click={() => activeTab = 'recipes'}>
+          Recipes{#if recipes.length > 0}<span class="opacity-60 text-xs ml-0.5">{recipes.length}</span>{/if}
         </button>
         {#if isBusiness}
-          <button
-            class="lg:hidden flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
+          <button class="lg:hidden flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex-shrink-0"
             style={activeTab === 'menu' ? 'border-color:#FF6B35;color:#FF6B35;' : 'border-color:transparent;color:var(--muted-foreground);'}
-            on:click={() => activeTab = 'menu'}
-          >
-            Menu{#if menuItems.length > 0}<span class="opacity-60 text-xs ml-1">{menuItems.length}</span>{/if}
+            on:click={() => activeTab = 'menu'}>
+            Menu{#if menuItems.length > 0}<span class="opacity-60 text-xs ml-0.5">{menuItems.length}</span>{/if}
           </button>
         {/if}
         <div class="flex-1"></div>
@@ -672,7 +489,7 @@
         </div>
       </div>
 
-      <!-- ── CONTENT AREA ── -->
+      <!-- CONTENT AREA -->
       <div class="{isBusiness ? 'lg:grid lg:grid-cols-[1fr_280px]' : ''} lg:gap-6 items-start mt-5">
 
         <!-- LEFT COLUMN -->
@@ -687,11 +504,6 @@
                 {#if isOwnProfile}<a href="/create" class="text-sm font-semibold mt-3 hover:opacity-70" style="color:#FF6B35;">Create post →</a>{/if}
               </div>
             {:else}
-              <!--
-                FIX: postStats is now populated via a single batched await before
-                this render, so stats are always ready when the grid paints.
-                Using `?? 0` as a safe fallback for any edge cases.
-              -->
               <div class="grid grid-cols-3 gap-px">
                 {#each posts as post, i (post.id)}
                   <button class="aspect-square bg-muted overflow-hidden relative group" on:click={() => openPostModal(post.id, i)}>
@@ -738,7 +550,7 @@
               </div>
             {/if}
 
-          <!-- MENU TAB (mobile only) -->
+          <!-- MENU TAB (mobile) -->
           {:else if activeTab === 'menu' && isBusiness}
             <div class="space-y-1">
               {#if menuCategories.length > 1}
@@ -794,8 +606,7 @@
                               </div>
                             {:else}
                               <div class="flex items-center gap-1.5">
-                                <button class="w-7 h-7 rounded-full border border-border flex items-center justify-center hover:bg-muted"
-                                  on:click={() => { const lines = getItemCartLines(item.id); if(lines.length) removeFromCart(lines[0].key); }}><MinusIcon size={12}/></button>
+                                <button class="w-7 h-7 rounded-full border border-border flex items-center justify-center hover:bg-muted" on:click={() => decrementItem(item.id)}><MinusIcon size={12}/></button>
                                 <span class="text-sm font-bold w-4 text-center">{inCartQty}</span>
                                 <button class="w-7 h-7 rounded-full text-white flex items-center justify-center" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}><PlusIcon size={12}/></button>
                               </div>
@@ -810,9 +621,9 @@
             </div>
           {/if}
 
-        </div><!-- end left column -->
+        </div><!-- /left -->
 
-        <!-- RIGHT COLUMN: Menu sidebar — desktop only, business only -->
+        <!-- RIGHT COLUMN: sticky menu sidebar (desktop, business only) -->
         {#if isBusiness}
           <div class="hidden lg:block">
             <div class="sticky top-20 bg-card border border-border rounded-2xl overflow-hidden flex flex-col" style="max-height: calc(100vh - 120px);">
@@ -866,8 +677,7 @@
                                   </div>
                                 {:else}
                                   <div class="flex items-center gap-1">
-                                    <button class="w-5 h-5 rounded-full border border-border flex items-center justify-center hover:bg-muted"
-                                      on:click={() => { const lines = getItemCartLines(item.id); if(lines.length) removeFromCart(lines[0].key); }}><MinusIcon size={9}/></button>
+                                    <button class="w-5 h-5 rounded-full border border-border flex items-center justify-center hover:bg-muted" on:click={() => decrementItem(item.id)}><MinusIcon size={9}/></button>
                                     <span class="text-xs font-bold w-3 text-center">{inCartQty}</span>
                                     <button class="w-5 h-5 rounded-full text-white flex items-center justify-center" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}><PlusIcon size={9}/></button>
                                   </div>
@@ -885,21 +695,24 @@
           </div>
         {/if}
 
-      </div><!-- end content grid -->
-
+      </div><!-- /content grid -->
     </main>
+
   {:else}
     <div class="flex items-center justify-center py-32"><p class="text-muted-foreground">Profile not found</p></div>
   {/if}
 </div>
 
+<!-- Floating checkout button — only for customers with items in cart -->
 {#if !isOwnProfile && $cartCount > 0}
   <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
-    <button class="flex items-center gap-3 px-6 py-3.5 rounded-2xl text-white font-semibold shadow-2xl hover:opacity-95 transition-all"
+    <button
+      class="flex items-center gap-3 px-6 py-3.5 rounded-2xl text-white font-semibold shadow-2xl hover:opacity-95 active:scale-95 transition-all"
       style="background-color:#FF6B35;"
-      on:click={() => { expandedSeller = $cartBySeller.length === 1 ? $cartBySeller[0].sellerId : null; showCart = true; }}>
+      on:click={() => goto('/checkout')}
+    >
       <ShoppingCartIcon size={20} weight="fill"/>
-      <span>{$cartCount} item{$cartCount !== 1 ? 's' : ''}</span>
+      <span>View order · {$cartCount} item{$cartCount !== 1 ? 's' : ''}</span>
       <span class="font-bold">Rs. {$cartTotal.toFixed(2)}</span>
     </button>
   </div>
