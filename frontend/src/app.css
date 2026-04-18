@@ -184,3 +184,82 @@
   --app-primary: 16 100% 60%;
   --activeColor: 120 100% 50%;
 }
+
+/* ============================================================
+   AUTH & ONBOARDING — additions only, nothing above is touched
+   ============================================================ */
+
+/* Shared spinner used across auth pages, modals, and loaders.
+   Defined globally so individual <style> blocks can be removed. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Shared input style for auth pages (signup, setup-profile, login).
+   Avoids repeating 8-class chains on every <input> / <textarea>.
+   Usage: class="auth-input" — add mb-* separately per element. */
+.auth-input {
+  width: 100%;
+  border-radius: 0.75rem;             /* rounded-xl */
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--background));
+  padding: 0.75rem 1rem;              /* py-3 px-4 */
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  line-height: 1.5;
+  outline: none;
+  transition: box-shadow 0.15s ease;
+}
+.auth-input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+.auth-input:focus {
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.35);
+}
+
+/* Leaflet map controls default to z-index 400-1000, which floats above
+   the app's sticky header (z-50 = 50). This clamps them safely below. */
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 40 !important;
+}
+.leaflet-pane {
+  z-index: 30 !important;
+}
+.leaflet-overlay-pane {
+  z-index: 31 !important;
+}
+.leaflet-marker-pane {
+  z-index: 35 !important;
+}
+.leaflet-popup-pane {
+  z-index: 38 !important;
+}
+/* auth-input-white: always white background with dark text.
+   Used on signup / setup-profile so inputs are clearly readable in
+   both light and dark mode — mirroring the original login page style. */
+.auth-input-white {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid #d1d5db;
+  background-color: #ffffff;
+  padding: 0.75rem 1rem;
+  color: #111827;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  outline: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.auth-input-white::placeholder {
+  color: #9ca3af;
+}
+.auth-input-white:focus {
+  border-color: #FF6B35;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.25);
+}
+.auth-input-white.pr-12 {
+  padding-right: 3rem;
+}

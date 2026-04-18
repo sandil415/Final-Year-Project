@@ -1,7 +1,7 @@
 <script>
 import { goto } from "$app/navigation";
 import { page } from "$app/stores";
-import { BellIcon, ShoppingBagIcon, ArrowLeftIcon } from "phosphor-svelte";
+import { BellIcon, ShoppingBagIcon, ArrowLeftIcon, ShoppingCartIcon } from "phosphor-svelte";
 import { onMount, onDestroy } from "svelte";
 import pb from '$lib/pocketbase';
 import { Heart, MessageCircle, UserPlus, Bell, X } from 'lucide-svelte';
@@ -257,7 +257,9 @@ let unsubscribe = null;
               <div class="max-h-64 overflow-y-auto">
                 {#if $cartItems.length === 0}
                   <div class="py-8 px-5 text-center">
-                    <div class="text-3xl mb-2">🛒</div>
+                    <div class="text-3xl mb-2 flex justify-center">
+                      <ShoppingCartIcon />
+                    </div>
                     <p class="text-sm text-muted-foreground">Your cart is empty.</p>
                   </div>
                 {:else}
