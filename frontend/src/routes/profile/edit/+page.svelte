@@ -122,30 +122,32 @@
 
   // ── Transactions loader ───────────────────────────────────────────────────────
   async function loadTransactions() {
-    txLoading = true;
-    try {
-      const [buyRes, sellRes] = await Promise.all([
-        pb.collection('orders').getList(1, 100, {
-          filter: `buyer = "${user.id}"`,
-          sort: '-created',
-          expand: 'seller',
-        }),
-        isBusiness
-          ? pb.collection('orders').getList(1, 100, {
-              filter: `seller = "${user.id}"`,
-              sort: '-created',
-              expand: 'buyer',
-            })
-          : Promise.resolve({ items: [] }),
-      ]);
-      transactions = buyRes.items;
-      salesOrders  = sellRes.items;
-    } catch (err) {
-      console.error(err);
-    } finally {
-      txLoading = false;
-    }
+  txLoading = true;
+  try {
+    const [buyRes, sellRes] = await Promise.all([
+      pb.collection('orders').getList(1, 100, {
+        filter: `buyer.id = "${user.id}"`,
+        sort: '-created',
+        expand: 'seller',
+        requestKey: 'tx-purchases',   // ← unique key prevents cancellation
+      }),
+      isBusiness
+        ? pb.collection('orders').getList(1, 100, {
+            filter: `seller.id = "${user.id}"`,
+            sort: '-created',
+            expand: 'buyer',
+            requestKey: 'tx-sales',   // ← different unique key
+          })
+        : Promise.resolve({ items: [] }),
+    ]);
+    transactions = buyRes.items;
+    salesOrders  = sellRes.items;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    txLoading = false;
   }
+}
 
   function navigateTo(page) {
     activePage = page;
