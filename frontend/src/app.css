@@ -36,7 +36,7 @@
     --border: 0 0% 89.8%;
     --app-primary: 16 100% 60%;
     --activeColor: 120 100% 50%;
-
+    --alert: 0 84% 60%;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -54,6 +54,7 @@
       --border: 0 0% 14.9%;
       --app-primary: 16 100% 60%;
       --activeColor: 120 100% 50%;
+      --alert: 0 84% 60%;
     }
   }
 
@@ -105,7 +106,9 @@
   .text-muted-foreground {
     color: hsl(var(--muted-foreground));
   }
-  
+  .text-alert {
+    color: hsl(var(--alert));
+  }
   .border-border {
     border-color: hsl(var(--border));
   }

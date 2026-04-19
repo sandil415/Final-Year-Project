@@ -308,7 +308,9 @@
 
         {#if !loading && !searchError && !hasResults}
           <div class="text-center py-16">
-            <p class="text-3xl mb-3">🔍</p>
+            <p class="text-3xl mb-3 flex items-center justify-center">
+              <MagnifyingGlassIcon></MagnifyingGlassIcon>
+            </p>
             <p class="text-sm text-muted-foreground">No results for "<strong>{query}</strong>"</p>
             <p class="text-xs text-muted-foreground mt-2">Try a shorter or different keyword</p>
           </div>

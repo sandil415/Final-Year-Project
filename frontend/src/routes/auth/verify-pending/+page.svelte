@@ -120,9 +120,8 @@
       {/if}
       <p class="text-sm text-muted-foreground mb-3">Didn't receive it?</p>
       <button
-        class="text-sm font-semibold underline hover:opacity-70 transition-opacity
+        class="text-sm text-alert font-semibold underline hover:opacity-70 transition-opacity
                disabled:opacity-40 disabled:cursor-not-allowed"
-        style="color:#FF6B35;"
         on:click={resend}
         disabled={resending}
       >
@@ -132,12 +131,12 @@
 
     <!-- Navigation -->
     <div class="mt-10 pt-6 border-t border-border flex items-center justify-center gap-4
-                flex-wrap text-sm text-muted-foreground">
-      <a href="/auth/login" class="hover:text-foreground transition-colors">
+        flex-wrap text-sm text-muted-foreground">
+      <a href="/auth/login" class="text-foreground font-bold hover:text-app-primary transition-colors">
         ← Back to login
       </a>
-      <span class="text-border select-none">·</span>
-      <a href="/auth/signup" class="hover:text-foreground transition-colors">
+      <span class="font-bold text-border select-none">·</span>
+      <a href="/auth/signup" class="text-foreground font-bold hover:text-app-primary transition-colors">
         Use a different email
       </a>
     </div>
