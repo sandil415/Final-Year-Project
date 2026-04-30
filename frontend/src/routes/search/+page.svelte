@@ -18,13 +18,42 @@
   let loadingExplore = true;
   let currentUser = null;
   let selectedPostId = null;
+  let favoriteRecords = {};
 
   let debounceTimer = null;
+
+  function normalizeSearchText(value) {
+    return String(value ?? '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function tokenizeSearchText(value) {
+    return normalizeSearchText(value)
+      .split(/[^a-z0-9]+/i)
+      .filter(Boolean);
+  }
+
+  function matchesSearch(queryText, ...fields) {
+    const normalizedQuery = normalizeSearchText(queryText);
+    if (!normalizedQuery) return false;
+
+    const combined = normalizeSearchText(fields.filter(Boolean).join(' '));
+    if (!combined) return false;
+
+    // Very short queries should match the start of a word, not any random substring.
+    if (normalizedQuery.length < 3) {
+      return tokenizeSearchText(combined).some((token) => token.startsWith(normalizedQuery));
+    }
+
+    return combined.includes(normalizedQuery);
+  }
 
   onMount(async () => {
     requireAuth();
     currentUser = pb.authStore.record ?? pb.authStore.model;
-    await loadExplorePosts();
+    await Promise.all([loadExplorePosts(), loadFavoriteIds()]);
   });
 
   function goBack() {
@@ -34,6 +63,43 @@
 
   function openProfile(username) {
     if (username) goto(`/profile/${username}`);
+  }
+
+  async function loadFavoriteIds() {
+    try {
+      const records = await pb.collection('favorites').getFullList({
+        filter: `user = "${currentUser.id}"`,
+        fields: 'id,menuItem',
+        requestKey: 'search-favorites',
+      });
+      favoriteRecords = Object.fromEntries(records.map((f) => [f.menuItem, f.id]));
+    } catch (_) {
+      favoriteRecords = {};
+    }
+  }
+
+  function isFavorite(itemId) {
+    return !!favoriteRecords[itemId];
+  }
+
+  async function toggleFavorite(item) {
+    if (!item?.id || !currentUser?.id) return;
+    const existingId = favoriteRecords[item.id];
+    try {
+      if (existingId) {
+        await pb.collection('favorites').delete(existingId);
+        const { [item.id]: _removed, ...rest } = favoriteRecords;
+        favoriteRecords = rest;
+      } else {
+        const saved = await pb.collection('favorites').create({
+          user: currentUser.id,
+          menuItem: item.id,
+        });
+        favoriteRecords = { ...favoriteRecords, [item.id]: saved.id };
+      }
+    } catch (err) {
+      console.error('Failed to update favorite:', err);
+    }
   }
 
   async function loadExplorePosts() {
@@ -139,28 +205,37 @@
     const safe = q.replace(/['"\\]/g, '');
     if (!safe) { loading = false; return; }
     try {
+      const shortQuery = safe.trim().length < 3;
       const [usersRes, menuRes, recipesRes] = await Promise.all([
-        pb.collection('users').getList(1, 10, {
-          filter: `username ~ "${safe}" || businessName ~ "${safe}"`,
+        pb.collection('users').getList(1, shortQuery ? 40 : 10, {
+          filter: shortQuery ? '' : `username ~ "${safe}" || businessName ~ "${safe}"`,
           sort: 'username',
         }).catch(e => { console.warn('users search:', e); return { items: [] }; }),
 
-        pb.collection('menuItems').getList(1, 10, {
-          filter: `name ~ "${safe}" || description ~ "${safe}"`,
+        pb.collection('menuItems').getList(1, shortQuery ? 60 : 10, {
+          filter: shortQuery ? '' : `name ~ "${safe}" || description ~ "${safe}"`,
           expand: 'seller',
           sort: 'name',
         }).catch(e => { console.warn('menu search:', e); return { items: [] }; }),
 
-        pb.collection('recipes').getList(1, 8, {
-          filter: `title ~ "${safe}"`,
+        pb.collection('recipes').getList(1, shortQuery ? 40 : 8, {
+          filter: shortQuery ? '' : `title ~ "${safe}"`,
           expand: 'user',
           sort: '-created',
         }).catch(e => { console.warn('recipes search:', e); return { items: [] }; }),
       ]);
 
-      userResults   = usersRes.items;
-      menuResults   = menuRes.items;
-      recipeResults = recipesRes.items;
+      userResults = usersRes.items
+        .filter((user) => matchesSearch(safe, user.username, user.businessName, user.bio))
+        .slice(0, 10);
+
+      menuResults = menuRes.items
+        .filter((item) => matchesSearch(safe, item.name, item.description, item.category))
+        .slice(0, 10);
+
+      recipeResults = recipesRes.items
+        .filter((recipe) => matchesSearch(safe, recipe.title, recipe.description, recipe.tags))
+        .slice(0, 8);
     } catch (err) {
       console.error('Search failed:', err);
       searchError = 'Search failed. Please try again.';
@@ -247,26 +322,36 @@
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Dishes & Menu Items</p>
             <div class="space-y-1">
               {#each menuResults as item (item.id)}
-                <button
-                  class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-muted transition-colors text-left"
-                  on:click={() => openProfile(item.expand?.seller?.username)}
-                >
-                  {#if item.image && item.image.length > 0}
-                    <img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-12 h-12 rounded-xl object-cover flex-shrink-0"/>
-                  {:else}
-                    <div class="w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-xl flex-shrink-0">🍽️</div>
-                  {/if}
-                  <div class="flex-1 min-w-0">
-                    <span class="font-medium text-sm block">{item.name}</span>
-                    <div class="flex items-center gap-2 mt-0.5">
-                      <span class="text-sm font-bold" style="color:#FF6B35;">Rs. {item.price}</span>
-                      {#if !item.isAvailable}<span class="text-xs text-muted-foreground">(Unavailable)</span>{/if}
-                    </div>
-                    {#if item.expand?.seller}
-                      <span class="text-xs text-muted-foreground truncate block">by {item.expand.seller.businessName || item.expand.seller.username}</span>
+                <div class="w-full flex items-center gap-2 rounded-xl hover:bg-muted transition-colors">
+                  <button
+                    class="flex-1 flex items-center gap-3 p-3 text-left min-w-0"
+                    on:click={() => openProfile(item.expand?.seller?.username)}
+                  >
+                    {#if item.image && item.image.length > 0}
+                      <img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-12 h-12 rounded-xl object-cover flex-shrink-0"/>
+                    {:else}
+                      <div class="w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-xl flex-shrink-0">🍽️</div>
                     {/if}
-                  </div>
-                </button>
+                    <div class="flex-1 min-w-0">
+                      <span class="font-medium text-sm block">{item.name}</span>
+                      <div class="flex items-center gap-2 mt-0.5">
+                        <span class="text-sm font-bold" style="color:#FF6B35;">Rs. {item.price}</span>
+                        {#if !item.isAvailable}<span class="text-xs text-muted-foreground">(Unavailable)</span>{/if}
+                      </div>
+                      {#if item.expand?.seller}
+                        <span class="text-xs text-muted-foreground truncate block">by {item.expand.seller.businessName || item.expand.seller.username}</span>
+                      {/if}
+                    </div>
+                  </button>
+                  <button
+                    class="w-10 h-10 mr-2 rounded-full border border-border flex items-center justify-center hover:bg-background transition-colors flex-shrink-0"
+                    on:click|stopPropagation={() => toggleFavorite(item)}
+                    title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                    aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                  >
+                    <HeartIcon size={17} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                  </button>
+                </div>
               {/each}
             </div>
           </div>

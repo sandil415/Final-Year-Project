@@ -33,13 +33,9 @@
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
 
-  // eSewa UAT config
-  const ESEWA_TEST_URL = 'https://rc-epay.esewa.com.np/api/epay/main/v2/form';
+  // eSewa UAT config — swap action URL and merchant code for production
+  const ESEWA_TEST_URL   = 'https://rc-epay.esewa.com.np/api/epay/main/v2/form';
   const ESEWA_MERCHANT_CODE = 'EPAYTEST';
-
-  // ── Cart cleared flag in localStorage so success/failure pages can clean up ──
-  // Key: 'esewa_pending_{orderId}' → sellerId
-  // On success page: read this key, call removeSellerItems, delete key.
 
   function showToast(msg, type = 'success') {
     toast = { msg, type };
@@ -55,10 +51,8 @@
       initCheckout(g.sellerId);
       paymentMethod[g.sellerId] = 'esewa';
 
-      // Init calendar to current month
       calendarYear[g.sellerId]  = today.getFullYear();
-      calendarMonth[g.sellerId] = today.getMonth(); // 0-based
-      // Default time: next hour rounded
+      calendarMonth[g.sellerId] = today.getMonth();
       const nextHour = new Date(today);
       nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
       scheduledTime[g.sellerId] = `${String(nextHour.getHours()).padStart(2,'0')}:00`;
@@ -80,38 +74,30 @@
   const DAYS   = ['Su','Mo','Tu','We','Th','Fr','Sa'];
 
   function calDays(year, month) {
-    const first = new Date(year, month, 1).getDay(); // 0=Sun
+    const first = new Date(year, month, 1).getDay();
     const total = new Date(year, month + 1, 0).getDate();
     return { first, total };
   }
 
   function calPrev(sid) {
-    if (calendarMonth[sid] === 0) {
-      calendarMonth[sid] = 11;
-      calendarYear[sid]--;
-    } else {
-      calendarMonth[sid]--;
-    }
+    if (calendarMonth[sid] === 0) { calendarMonth[sid] = 11; calendarYear[sid]--; }
+    else { calendarMonth[sid]--; }
     calendarMonth = { ...calendarMonth };
     calendarYear  = { ...calendarYear };
   }
 
   function calNext(sid) {
-    if (calendarMonth[sid] === 11) {
-      calendarMonth[sid] = 0;
-      calendarYear[sid]++;
-    } else {
-      calendarMonth[sid]++;
-    }
+    if (calendarMonth[sid] === 11) { calendarMonth[sid] = 0; calendarYear[sid]++; }
+    else { calendarMonth[sid]++; }
     calendarMonth = { ...calendarMonth };
     calendarYear  = { ...calendarYear };
   }
 
   function selectDay(sid, day) {
-    const y = calendarYear[sid];
-    const m = calendarMonth[sid];
+    const y  = calendarYear[sid];
+    const m  = calendarMonth[sid];
     const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-    if (ds < todayStr) return; // past — ignore
+    if (ds < todayStr) return;
     scheduledDate[sid] = ds;
     scheduledDate = { ...scheduledDate };
   }
@@ -129,13 +115,12 @@
   }
 
   function isPast(sid, day) {
-    const y = calendarYear[sid];
-    const m = calendarMonth[sid];
+    const y  = calendarYear[sid];
+    const m  = calendarMonth[sid];
     const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     return ds < todayStr;
   }
 
-  // Nav: don't allow going before current month
   function canGoPrev(sid) {
     return calendarYear[sid] > today.getFullYear() ||
            (calendarYear[sid] === today.getFullYear() && calendarMonth[sid] > today.getMonth());
@@ -153,14 +138,14 @@
     if (!window.L) {
       await new Promise((resolve, reject) => {
         if (document.querySelector('script[src*="leaflet"]')) { resolve(); return; }
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        const link  = document.createElement('link');
+        link.rel    = 'stylesheet';
+        link.href   = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
         document.head.appendChild(link);
-        const script = document.createElement('script');
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        script.onload = resolve;
-        script.onerror = reject;
+        const script    = document.createElement('script');
+        script.src      = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        script.onload   = resolve;
+        script.onerror  = reject;
         document.head.appendChild(script);
       });
     }
@@ -227,12 +212,12 @@
   }
 
   // ── Qty helpers ───────────────────────────────────────────────────────────────
-  function addOne(item)      { addCartItem(item, 1, {}, []); }
-  function removeOne(lineKey){ removeCartItem(lineKey, 1); }
+  function addOne(item)       { addCartItem(item, 1, {}, []); }
+  function removeOne(lineKey) { removeCartItem(lineKey, 1); }
 
   // ── eSewa HMAC-SHA256 ─────────────────────────────────────────────────────────
   async function generateEsewaSignature(totalAmount, transactionUUID) {
-    const secretKey = '8gBm/:&EnhH.1/q';
+    const secretKey = '8gBm/:&EnhH.1/q'; // UAT secret — use your real secret in production
     const message   = `total_amount=${totalAmount},transaction_uuid=${transactionUUID},product_code=${ESEWA_MERCHANT_CODE}`;
     const encoder   = new TextEncoder();
     const key = await window.crypto.subtle.importKey(
@@ -243,7 +228,7 @@
     return btoa(String.fromCharCode(...new Uint8Array(sig)));
   }
 
-  // ── Validate checkout fields ──────────────────────────────────────────────────
+  // ── Validate checkout ─────────────────────────────────────────────────────────
   function validateCheckout(group) {
     const sid = group.sellerId;
     const co  = $checkoutState[sid];
@@ -262,7 +247,10 @@
     return { co, scheduledAt };
   }
 
-  function buildOrderPayload(group, co, scheduledAt, status = 'pending') {
+  // ── Build order payload ───────────────────────────────────────────────────────
+  // paymentMethod: 'esewa' | 'cod'
+  // paymentStatus: 'pending' (COD / eSewa not yet verified) | 'paid' (eSewa confirmed on success page)
+  function buildOrderPayload(group, co, scheduledAt, method, status = 'pending') {
     const payload = {
       buyer:           currentUser.id,
       seller:          group.sellerId,
@@ -279,16 +267,22 @@
       status,
       deliveryAddress: co.address,
       notes:           co.notes || '',
+      paymentMethod:   method,        // ← 'esewa' or 'cod' — stored on every order
+      paymentStatus:   method === 'esewa' ? 'pending' : 'unpaid',
+      // paymentStatus values:
+      //   'unpaid'   — COD, not yet paid
+      //   'pending'  — eSewa payment initiated, not yet verified
+      //   'paid'     — eSewa payment confirmed by success page
+      //   'refunded' — business issued refund after cancellation
     };
     if (scheduledAt) payload.scheduledAt = scheduledAt;
     return payload;
   }
 
-  // ── eSewa: create order → store pending marker → redirect ─────────────────────
-  // FIX: We clear the cart BEFORE redirecting to eSewa. If the user abandons
-  // payment, the cart is already gone — this is acceptable UX (they can re-add).
-  // Alternatively the success page checks localStorage for a pending order ID
-  // and marks it confirmed. Either way, items are not re-shown after redirect.
+  // ── eSewa: store pending data in localStorage → redirect ─────────────────────
+  // KEY CHANGE: We do NOT create the order here.
+  // The order is created by the /checkout/esewa-success page after eSewa confirms.
+  // This avoids ghost orders when users abandon payment.
   async function initiateEsewaPayment(group) {
     const sid       = group.sellerId;
     const validated = validateCheckout(group);
@@ -297,34 +291,40 @@
 
     setCheckoutField(sid, 'placing', true);
     try {
-      const notesWithTag = `[eSewa]${co.notes ? ' ' + co.notes : ''}`;
-      const orderPayload = buildOrderPayload(
-        group,
-        { ...co, notes: notesWithTag },
-        scheduledAt,
-        scheduledAt ? 'scheduled' : 'pending'
-      );
-      const order = await pb.collection('orders').create(orderPayload);
-
-      const transactionUUID = order.id;
+      // Generate a unique transaction ID that the success page will use as the order ID
+      const transactionUUID = `F${Date.now()}${sid.slice(0,4)}`;
       const totalAmount     = group.subtotal.toFixed(2);
       const signature       = await generateEsewaSignature(totalAmount, transactionUUID);
 
-      // ── FIX: clear cart items for this seller BEFORE leaving the page ──────
-      // This prevents items from appearing in cart again if the user navigates
-      // back without completing payment. The order already exists in the DB.
-      removeSellerItems(sid);
+      // Save the full order data so the success page can create the order
+      const pendingData = {
+        transactionUUID,
+        buyer:           currentUser.id,
+        seller:          sid,
+        sellerName:      group.sellerName,
+        items:           group.entries.map(e => ({
+          menuItemId:     e.item.id,
+          name:           e.item.name,
+          basePrice:      e.item.price,
+          effectivePrice: e.effectivePrice ?? e.item.price,
+          quantity:       e.quantity,
+          selectionLabel: e.selectionLabel || '',
+          selections:     e.selections || {},
+        })),
+        totalAmount:     group.subtotal,
+        deliveryAddress: co.address,
+        notes:           co.notes || '',
+        scheduledAt:     scheduledAt || null,
+        savedAt:         Date.now(),
+      };
 
-      // Store a lightweight marker so the success/failure pages know which order
-      // to confirm or cancel without re-visiting the cart.
       try {
-        localStorage.setItem(`esewa_pending_${transactionUUID}`, JSON.stringify({
-          orderId: order.id,
-          sellerId: sid,
-          amount: totalAmount,
-          ts: Date.now(),
-        }));
+        localStorage.setItem(`esewa_pending_${transactionUUID}`, JSON.stringify(pendingData));
       } catch (_) {}
+
+      // Clear cart for this seller immediately so items don't linger if user
+      // navigates back without completing payment
+      removeSellerItems(sid);
 
       const successUrl = `${window.location.origin}/checkout/esewa-success`;
       const failureUrl = `${window.location.origin}/checkout/esewa-failure`;
@@ -353,7 +353,7 @@
       }
       document.body.appendChild(form);
       form.submit();
-      // Page navigates away — no need to reset placing
+      // Page navigates away — no further action needed here
 
     } catch (err) {
       console.error('eSewa error:', err);
@@ -372,8 +372,9 @@
     setCheckoutField(sid, 'placing', true);
     try {
       await pb.collection('orders').create(
-        buildOrderPayload(group, co, scheduledAt, scheduledAt ? 'scheduled' : 'pending')
+        buildOrderPayload(group, co, scheduledAt, 'cod', scheduledAt ? 'scheduled' : 'pending')
       );
+
       pb.collection('notifications').create({
         user:        sid,
         triggeredBy: currentUser.id,
@@ -404,7 +405,7 @@
     else placeCodOrder(group);
   }
 
-  // ── Scheduled date display helper ─────────────────────────────────────────────
+  // ── Calendar preview helper ───────────────────────────────────────────────────
   function formatScheduledPreview(sid) {
     const d = scheduledDate[sid];
     const t = scheduledTime[sid] || '12:00';
@@ -454,10 +455,10 @@
     {:else}
       <div class="space-y-4">
         {#each $cartBySeller as group (group.sellerId)}
-          {@const co         = $checkoutState[group.sellerId] || {}}
-          {@const isExpanded = !!expandedGroups[group.sellerId]}
-          {@const method     = paymentMethod[group.sellerId] || 'esewa'}
-          {@const isScheduled= !!scheduleEnabled[group.sellerId]}
+          {@const co          = $checkoutState[group.sellerId] || {}}
+          {@const isExpanded  = !!expandedGroups[group.sellerId]}
+          {@const method      = paymentMethod[group.sellerId] || 'esewa'}
+          {@const isScheduled = !!scheduleEnabled[group.sellerId]}
 
           <div class="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
 
@@ -586,43 +587,27 @@
                       {@const info = calDays(yr, mo)}
 
                       <div class="mt-4 pt-4 border-t border-border">
-
                         <!-- Calendar -->
                         <div class="rounded-xl border border-border bg-card overflow-hidden mb-3">
-
-                          <!-- Month nav -->
                           <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
-                            <button
-                              class="w-7 h-7 rounded-lg hover:bg-muted flex items-center justify-center text-muted-foreground disabled:opacity-30"
-                              disabled={!canGoPrev(sid)}
-                              on:click={() => calPrev(sid)}
-                            >‹</button>
+                            <button class="w-7 h-7 rounded-lg hover:bg-muted flex items-center justify-center text-muted-foreground disabled:opacity-30"
+                              disabled={!canGoPrev(sid)} on:click={() => calPrev(sid)}>‹</button>
                             <span class="text-sm font-semibold">{MONTHS[mo]} {yr}</span>
                             <button class="w-7 h-7 rounded-lg hover:bg-muted flex items-center justify-center text-muted-foreground" on:click={() => calNext(sid)}>›</button>
                           </div>
-
-                          <!-- Day-of-week header -->
                           <div class="grid grid-cols-7 border-b border-border">
-                            {#each DAYS as d}
-                              <div class="py-1.5 text-center text-[10px] font-semibold text-muted-foreground">{d}</div>
-                            {/each}
+                            {#each DAYS as d}<div class="py-1.5 text-center text-[10px] font-semibold text-muted-foreground">{d}</div>{/each}
                           </div>
-
-                          <!-- Day grid -->
                           <div class="grid grid-cols-7 p-2 gap-0.5">
-                            <!-- Blank cells before first day -->
-                            {#each Array(info.first) as _}
-                              <div></div>
-                            {/each}
-                            <!-- Day cells -->
+                            {#each Array(info.first) as _}<div></div>{/each}
                             {#each Array(info.total) as _, idx}
-                              {@const day = idx + 1}
+                              {@const day      = idx + 1}
                               {@const past     = isPast(sid, day)}
                               {@const selected = isSelected(sid, day)}
                               {@const todayDay = isToday(sid, day)}
                               <button
                                 class="h-8 w-full rounded-lg text-xs font-medium transition-all relative
-                                  {past     ? 'text-muted-foreground/30 cursor-not-allowed' : 'hover:bg-muted cursor-pointer'}
+                                  {past ? 'text-muted-foreground/30 cursor-not-allowed' : 'hover:bg-muted cursor-pointer'}
                                   {selected ? 'text-white font-bold' : ''}
                                   {todayDay && !selected ? 'font-bold' : ''}"
                                 style={selected ? 'background-color:#FF6B35;' : ''}
@@ -641,14 +626,10 @@
                         <!-- Time picker -->
                         <div class="flex items-center gap-3">
                           <label class="text-xs font-medium text-muted-foreground whitespace-nowrap">Delivery time</label>
-                          <input
-                            type="time"
-                            bind:value={scheduledTime[group.sellerId]}
-                            class="flex-1 border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                          />
+                          <input type="time" bind:value={scheduledTime[group.sellerId]}
+                            class="flex-1 border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"/>
                         </div>
 
-                        <!-- Preview -->
                         {#if formatScheduledPreview(sid)}
                           <div class="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium" style="background:#FF6B3512;color:#FF6B35;">
                             <CalendarIcon size={13}/>
@@ -665,7 +646,6 @@
                   <div>
                     <p class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Payment Method</p>
                     <div class="grid grid-cols-2 gap-2">
-                      <!-- eSewa -->
                       <button
                         class="flex items-center gap-2.5 p-3 rounded-xl border-2 transition-all text-left"
                         style={method === 'esewa' ? 'border-color:#6EC747;background:#6EC74710;' : 'border-color:hsl(var(--border));'}
@@ -680,7 +660,6 @@
                         </div>
                         {#if method === 'esewa'}<CheckCircleIcon size={14} class="ml-auto flex-shrink-0" style="color:#6EC747;" weight="fill"/>{/if}
                       </button>
-                      <!-- COD -->
                       <button
                         class="flex items-center gap-2.5 p-3 rounded-xl border-2 transition-all text-left"
                         style={method === 'cod' ? 'border-color:#FF6B35;background:#FF6B3510;' : 'border-color:hsl(var(--border));'}
@@ -696,6 +675,12 @@
                         {#if method === 'cod'}<CheckCircleIcon size={14} class="ml-auto flex-shrink-0" style="color:#FF6B35;" weight="fill"/>{/if}
                       </button>
                     </div>
+                    {#if method === 'esewa'}
+                      <p class="text-[11px] text-muted-foreground mt-2 flex items-center gap-1">
+                        <InfoIcon size={11}/>
+                        You'll be redirected to eSewa. Your order is only placed after payment is confirmed.
+                      </p>
+                    {/if}
                   </div>
 
                   <!-- Order summary -->
@@ -738,7 +723,7 @@
                         Schedule Order · Rs. {group.subtotal.toFixed(2)}
                       {:else}
                         <MoneyIcon size={16} weight="fill"/>
-                        Place Order · Rs. {group.subtotal.toFixed(2)}
+                        Place COD Order · Rs. {group.subtotal.toFixed(2)}
                       {/if}
                     </button>
                   </div>

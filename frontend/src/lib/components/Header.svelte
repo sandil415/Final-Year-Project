@@ -26,7 +26,7 @@ let unsubscribe = null;
     { href: '/search', label: 'Search' },
     isBusiness
       ? { href: '/business/dashboard', label: 'Dashboard', highlight: true }
-      : { href: '/explore', label: 'Explore' },
+      : { href: '/dashboard', label: 'Dashboard', highlight: true },
     { href: '/messages', label: 'Messages' },
   ];
 

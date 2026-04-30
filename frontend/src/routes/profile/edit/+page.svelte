@@ -1,6 +1,6 @@
 <script>
   import pb from '$lib/pocketbase';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import Header from '$lib/components/Header.svelte';
@@ -14,17 +14,31 @@
     DesktopIcon, CaretRightIcon, PackageIcon,
     ChefHatIcon, TruckIcon, ForkKnifeIcon,
     ArrowUpIcon, ArrowDownIcon, SpinnerGapIcon,
+    MapPinIcon, NavigationArrowIcon, PencilSimpleIcon,
+    HeartIcon,
   } from 'phosphor-svelte';
 
   // ── State ────────────────────────────────────────────────────────────────────
   let user = null;
   let loading = true;
-  let activePage = 'hub'; // 'hub' | 'personal' | 'transactions' | 'appearance' | 'security' | 'business'
+  let activePage = 'hub';
 
   // Personal info
   let username = '', bio = '', avatar = null, avatarPreview = null, avatarName = 'No file chosen';
   let canChangeUsername = true, nextUsernameChangeDate = null;
   let savingProfile = false;
+
+  // Location
+  let locationLat = null;
+  let locationLng = null;
+  let locationAddress = '';
+  let showLocationMap = false;
+  let locationMapContainer = null;
+  let locationMap = null;
+  let locationMarker = null;
+  let geocoding = false;
+  let savingLocation = false;
+  let gpsLoading = false;
 
   // Security
   let oldPassword = '', newPassword = '', confirmPassword = '';
@@ -38,10 +52,14 @@
   let docReg = null, docPan = null, docWard = null, docDftqc = null;
 
   // Transactions
-  let transactions = [];        // orders I placed as buyer
-  let salesOrders  = [];        // orders received as seller (business only)
+  let transactions = [];
+  let salesOrders  = [];
   let txLoading    = true;
-  let txTab        = 'purchases'; // 'purchases' | 'sales'
+  let txTab        = 'purchases';
+
+  // Favorites
+  let favorites = [];
+  let favoritesLoading = true;
 
   // Toast
   let toast = null;
@@ -79,11 +97,205 @@
     businessPhone = user.businessPhone || '';
     businessAddress = user.businessAddress || '';
     avatarPreview = user.avatar ? pb.files.getUrl(user, user.avatar) : null;
+
+    // Load saved location
+    locationLat = user.locationLat || null;
+    locationLng = user.locationLng || null;
+    locationAddress = user.locationAddress || '';
+
     checkUsernameEligibility();
     if (!isBusiness) await checkExistingApplication();
     loading = false;
   });
 
+  onDestroy(() => {
+    destroyLocationMap();
+  });
+
+  // ── Location map ──────────────────────────────────────────────────────────────
+
+  function destroyLocationMap() {
+    if (locationMap) {
+      locationMap.remove();
+      locationMap = null;
+      locationMarker = null;
+    }
+  }
+
+  async function openLocationMap() {
+    showLocationMap = true;
+    // Wait for DOM to render the map container
+    await tick();
+    await tick();
+    initLocationMap();
+  }
+
+  function closeLocationMap() {
+    showLocationMap = false;
+    destroyLocationMap();
+  }
+
+  function initLocationMap() {
+    if (!locationMapContainer || locationMap) return;
+
+    // Dynamic import so Leaflet only loads when needed
+    import('leaflet').then(({ default: L }) => {
+      import('leaflet/dist/leaflet.css').catch(() => {});
+
+      const defaultLat = locationLat ?? 27.7172;
+      const defaultLng = locationLng ?? 85.3240;
+
+      locationMap = L.map(locationMapContainer, {
+        center: [defaultLat, defaultLng],
+        zoom: locationLat ? 15 : 13,
+        zoomControl: true,
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+      }).addTo(locationMap);
+
+      // Custom pin icon matching app style
+      const pinIcon = L.divIcon({
+        className: '',
+        html: `<div style="width:32px;height:32px;background:#FF6B35;border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 32],
+      });
+
+      // Place marker at saved location or default
+      locationMarker = L.marker([defaultLat, defaultLng], {
+        icon: pinIcon,
+        draggable: true,
+      }).addTo(locationMap);
+
+      // Click on map → move marker + reverse geocode
+      locationMap.on('click', async (e) => {
+        const { lat, lng } = e.latlng;
+        locationMarker.setLatLng([lat, lng]);
+        locationLat = lat;
+        locationLng = lng;
+        await reverseGeocode(lat, lng);
+      });
+
+      // Drag marker → reverse geocode on dragend
+      locationMarker.on('dragend', async () => {
+        const { lat, lng } = locationMarker.getLatLng();
+        locationLat = lat;
+        locationLng = lng;
+        await reverseGeocode(lat, lng);
+      });
+
+      // If no saved location, try to show the marker at current address coords
+      if (locationLat && locationLng) {
+        reverseGeocode(locationLat, locationLng);
+      }
+    });
+  }
+
+  async function reverseGeocode(lat, lng) {
+    geocoding = true;
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+        { headers: { 'Accept-Language': 'en' } }
+      );
+      const data = await res.json();
+      if (data?.display_name) {
+        // Build a concise address: neighbourhood + city/town + country
+        const a = data.address || {};
+        const parts = [
+          a.road || a.neighbourhood || a.suburb,
+          a.city || a.town || a.village || a.county,
+          a.state,
+          a.country,
+        ].filter(Boolean);
+        locationAddress = parts.length ? parts.join(', ') : data.display_name;
+      }
+    } catch (_) {
+      // Nominatim failed — leave address as-is, user can edit manually
+    } finally {
+      geocoding = false;
+    }
+  }
+
+  async function useCurrentLocation() {
+    if (!navigator.geolocation) {
+      showToast('Geolocation not supported by your browser', 'error');
+      return;
+    }
+    gpsLoading = true;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        locationLat = lat;
+        locationLng = lng;
+
+        // If map is open, pan to new position
+        if (locationMap && locationMarker) {
+          locationMap.setView([lat, lng], 16);
+          locationMarker.setLatLng([lat, lng]);
+        }
+
+        await reverseGeocode(lat, lng);
+        gpsLoading = false;
+
+        // Open map if not already open
+        if (!showLocationMap) await openLocationMap();
+      },
+      (err) => {
+        gpsLoading = false;
+        showToast('Could not get your location. Please allow location access.', 'error');
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
+
+  async function saveLocation() {
+    if (!locationLat || !locationLng) {
+      showToast('Pin a location on the map first', 'error');
+      return;
+    }
+    savingLocation = true;
+    try {
+      const updated = await pb.collection('users').update(user.id, {
+        locationLat,
+        locationLng,
+        locationAddress,
+      });
+      pb.authStore.save(pb.authStore.token, updated);
+      user = updated;
+      showToast('Location saved ✓');
+      closeLocationMap();
+    } catch (err) {
+      showToast(err?.response?.message || 'Failed to save location', 'error');
+    } finally {
+      savingLocation = false;
+    }
+  }
+
+  async function clearLocation() {
+    try {
+      const updated = await pb.collection('users').update(user.id, {
+        locationLat: null,
+        locationLng: null,
+        locationAddress: '',
+      });
+      pb.authStore.save(pb.authStore.token, updated);
+      user = updated;
+      locationLat = null;
+      locationLng = null;
+      locationAddress = '';
+      closeLocationMap();
+      showToast('Location removed');
+    } catch (err) {
+      showToast('Failed to remove location', 'error');
+    }
+  }
+
+  // ── Username eligibility ──────────────────────────────────────────────────────
   function checkUsernameEligibility() {
     if (!user.usernameLastChanged) return;
     const last = new Date(user.usernameLastChanged);
@@ -120,38 +332,69 @@
     showToast('Business account approved! 🎉');
   }
 
-  // ── Transactions loader ───────────────────────────────────────────────────────
+  // ── Transactions ──────────────────────────────────────────────────────────────
   async function loadTransactions() {
-  txLoading = true;
-  try {
-    const [buyRes, sellRes] = await Promise.all([
-      pb.collection('orders').getList(1, 100, {
-        filter: `buyer.id = "${user.id}"`,
-        sort: '-created',
-        expand: 'seller',
-        requestKey: 'tx-purchases',   // ← unique key prevents cancellation
-      }),
-      isBusiness
-        ? pb.collection('orders').getList(1, 100, {
-            filter: `seller.id = "${user.id}"`,
-            sort: '-created',
-            expand: 'buyer',
-            requestKey: 'tx-sales',   // ← different unique key
-          })
-        : Promise.resolve({ items: [] }),
-    ]);
-    transactions = buyRes.items;
-    salesOrders  = sellRes.items;
-  } catch (err) {
-    console.error(err);
-  } finally {
-    txLoading = false;
+    txLoading = true;
+    try {
+      const [buyRes, sellRes] = await Promise.all([
+        pb.collection('orders').getList(1, 100, {
+          filter: `buyer.id = "${user.id}"`,
+          sort: '-created',
+          expand: 'seller',
+          requestKey: 'tx-purchases',
+        }),
+        isBusiness
+          ? pb.collection('orders').getList(1, 100, {
+              filter: `seller.id = "${user.id}"`,
+              sort: '-created',
+              expand: 'buyer',
+              requestKey: 'tx-sales',
+            })
+          : Promise.resolve({ items: [] }),
+      ]);
+      transactions = buyRes.items;
+      salesOrders  = sellRes.items;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      txLoading = false;
+    }
   }
-}
+
+  async function loadFavorites() {
+    favoritesLoading = true;
+    try {
+      const records = await pb.collection('favorites').getFullList({
+        filter: `user = "${user.id}"`,
+        sort: '-created',
+        expand: 'menuItem,menuItem.seller',
+        requestKey: 'settings-favorites',
+      });
+      favorites = records;
+    } catch (err) {
+      console.error('Failed to load favorites:', err);
+      favorites = [];
+    } finally {
+      favoritesLoading = false;
+    }
+  }
+
+  async function removeFavorite(favorite) {
+    try {
+      await pb.collection('favorites').delete(favorite.id);
+      favorites = favorites.filter((f) => f.id !== favorite.id);
+      showToast('Removed from favourites');
+    } catch (err) {
+      showToast(err?.response?.message || 'Failed to remove favourite', 'error');
+    }
+  }
 
   function navigateTo(page) {
     activePage = page;
     if (page === 'transactions') loadTransactions();
+    if (page === 'favorites') loadFavorites();
+    // Close location map when navigating away
+    if (page !== 'personal') closeLocationMap();
   }
 
   // ── Avatar ────────────────────────────────────────────────────────────────────
@@ -258,7 +501,14 @@
     return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  // Aggregate stats for transaction summary
+  function favoriteItem(favorite) {
+    return favorite.expand?.menuItem || null;
+  }
+
+  function favoriteSeller(item) {
+    return item?.expand?.seller || null;
+  }
+
   $: totalSpent = transactions
     .filter(o => o.status === 'delivered')
     .reduce((s, o) => s + (o.totalAmount || 0), 0);
@@ -266,6 +516,7 @@
     .filter(o => o.status === 'delivered')
     .reduce((s, o) => s + (o.totalAmount || 0), 0);
   $: activeTxList = txTab === 'purchases' ? transactions : salesOrders;
+  $: hasLocation = !!(locationLat && locationLng);
 </script>
 
 <!-- ── TOAST ─────────────────────────────────────────────────────────────────── -->
@@ -408,7 +659,6 @@
     {:else if activePage === 'hub'}
       <div class="max-w-lg mx-auto px-4 py-10">
 
-        <!-- Profile card at top -->
         <div class="flex items-center gap-4 mb-10 p-5 bg-card border border-border rounded-2xl">
           <div class="relative flex-shrink-0">
             <img
@@ -428,13 +678,16 @@
               <p class="text-xs font-medium mt-0.5" style="color:#FF6B35;">{user.businessName || 'Business Account'}</p>
             {/if}
             <p class="text-xs text-muted-foreground mt-0.5 truncate">{user.bio || 'No bio yet'}</p>
+            {#if locationAddress}
+              <p class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1 truncate">
+                <MapPinIcon size={10} weight="fill" style="color:#FF6B35;flex-shrink:0;" />
+                {locationAddress}
+              </p>
+            {/if}
           </div>
         </div>
 
-        <!-- Nav items -->
         <nav class="space-y-2">
-
-          <!-- Personal Information -->
           <button
             class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
             on:click={() => navigateTo('personal')}
@@ -444,12 +697,11 @@
             </div>
             <div class="flex-1 min-w-0">
               <p class="font-semibold text-sm">Personal Information</p>
-              <p class="text-xs text-muted-foreground mt-0.5">Username, bio, profile picture</p>
+              <p class="text-xs text-muted-foreground mt-0.5">Username, bio, profile picture, location</p>
             </div>
             <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
           </button>
 
-          <!-- Security -->
           <button
             class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
             on:click={() => navigateTo('security')}
@@ -464,7 +716,6 @@
             <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
           </button>
 
-          <!-- Transaction History -->
           <button
             class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
             on:click={() => navigateTo('transactions')}
@@ -481,7 +732,20 @@
             <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
           </button>
 
-          <!-- Appearance -->
+          <button
+            class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
+            on:click={() => navigateTo('favorites')}
+          >
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#EF444415;">
+              <HeartIcon size={20} style="color:#EF4444;" weight="duotone" />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="font-semibold text-sm">Favourites</p>
+              <p class="text-xs text-muted-foreground mt-0.5">Saved dishes from menus</p>
+            </div>
+            <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+          </button>
+
           <button
             class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
             on:click={() => navigateTo('appearance')}
@@ -496,7 +760,6 @@
             <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
           </button>
 
-          <!-- Business (if applicable) -->
           {#if isBusiness}
             <button
               class="w-full flex items-center gap-4 p-4 bg-card border border-border rounded-2xl hover:border-orange-300 dark:hover:border-orange-700 transition-all group text-left"
@@ -512,7 +775,6 @@
               <CaretRightIcon size={16} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
             </button>
           {:else}
-            <!-- Non-business upgrade CTA -->
             <button
               class="w-full flex items-center gap-4 p-4 bg-card border-2 border-dashed border-border hover:border-orange-300 rounded-2xl transition-all group text-left"
               on:click={() => showBusinessModal = true}
@@ -538,7 +800,6 @@
             </button>
           {/if}
 
-          <!-- Divider -->
           <div class="pt-2">
             <button
               class="w-full flex items-center gap-4 p-4 rounded-2xl border border-red-200 dark:border-red-950 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-left group"
@@ -560,7 +821,7 @@
     {:else if activePage === 'personal'}
       <div class="max-w-lg mx-auto px-4 py-8">
         <button class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground mb-6 transition-colors"
-          on:click={() => activePage = 'hub'}>
+          on:click={() => { closeLocationMap(); activePage = 'hub'; }}>
           <ArrowLeftIcon size={16} />Back to Settings
         </button>
         <h1 class="text-xl font-bold mb-6">Personal Information</h1>
@@ -582,7 +843,8 @@
           </div>
         </div>
 
-        <div class="space-y-4">
+        <!-- Username + Bio -->
+        <div class="space-y-4 mb-6">
           <div>
             <label class="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wider">Username</label>
             <input class="w-full border border-border rounded-xl px-4 py-2.5 bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -611,10 +873,178 @@
             {#if savingProfile}
               <SpinnerGapIcon size={16} class="animate-spin" />Saving…
             {:else}
-              <CheckCircleIcon size={16} weight="fill" />Save Changes
+              <CheckCircleIcon size={16} weight="fill" />Save Profile
             {/if}
           </button>
         </div>
+
+        <!-- ── LOCATION SECTION ─────────────────────────────────────────────── -->
+        <div class="border-t border-border pt-6">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="font-bold text-sm flex items-center gap-1.5">
+                <MapPinIcon size={15} weight="fill" style="color:#FF6B35;" />
+                My Location
+              </h2>
+              <p class="text-xs text-muted-foreground mt-0.5">
+                Used as your default delivery address
+              </p>
+            </div>
+            <!-- GPS shortcut — always accessible -->
+            <button
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+              on:click={useCurrentLocation}
+              disabled={gpsLoading}
+              title="Use device GPS"
+            >
+              {#if gpsLoading}
+                <SpinnerGapIcon size={13} class="animate-spin" style="color:#FF6B35;" />
+                Locating…
+              {:else}
+                <NavigationArrowIcon size={13} weight="fill" style="color:#FF6B35;" />
+                Use GPS
+              {/if}
+            </button>
+          </div>
+
+          <!-- Current location display (when saved) -->
+          {#if hasLocation && !showLocationMap}
+            <div class="flex items-start gap-3 p-4 bg-card border border-border rounded-2xl mb-3">
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5" style="background:#FF6B3515;">
+                <MapPinIcon size={16} weight="fill" style="color:#FF6B35;" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-foreground leading-snug">{locationAddress || 'Saved location'}</p>
+                <p class="text-[11px] text-muted-foreground mt-0.5">
+                  {locationLat?.toFixed(5)}, {locationLng?.toFixed(5)}
+                </p>
+              </div>
+              <div class="flex gap-1 flex-shrink-0">
+                <button
+                  class="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
+                  title="Edit location"
+                  on:click={openLocationMap}
+                >
+                  <PencilSimpleIcon size={14} />
+                </button>
+                <button
+                  class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-red-400"
+                  title="Remove location"
+                  on:click={clearLocation}
+                >
+                  <TrashIcon size={14} weight="fill" />
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Set location button (when none saved and map is closed) -->
+          {#if !hasLocation && !showLocationMap}
+            <button
+              class="w-full flex items-center gap-3 p-4 border-2 border-dashed border-border hover:border-orange-300 rounded-2xl transition-all text-left group"
+              on:click={openLocationMap}
+            >
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background:#FF6B3515;">
+                <MapPinIcon size={16} weight="duotone" style="color:#FF6B35;" />
+              </div>
+              <div class="flex-1">
+                <p class="text-sm font-medium text-foreground">Set your location</p>
+                <p class="text-xs text-muted-foreground">Pin your location on the map</p>
+              </div>
+              <ArrowRightIcon size={14} class="text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+            </button>
+          {/if}
+
+          <!-- Change location button (when saved and map is closed) -->
+          {#if hasLocation && !showLocationMap}
+            <button
+              class="w-full py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors flex items-center justify-center gap-2"
+              on:click={openLocationMap}
+            >
+              <MapPinIcon size={14} style="color:#FF6B35;" weight="fill" />
+              Change location on map
+            </button>
+          {/if}
+
+          <!-- Inline Leaflet map -->
+          {#if showLocationMap}
+            <div class="border border-border rounded-2xl overflow-hidden">
+
+              <!-- Map header -->
+              <div class="flex items-center justify-between px-4 py-3 border-b border-border bg-card">
+                <div class="flex items-center gap-2">
+                  <MapPinIcon size={14} weight="fill" style="color:#FF6B35;" />
+                  <span class="text-xs font-semibold text-foreground">
+                    {geocoding ? 'Getting address…' : 'Click or drag pin to set location'}
+                  </span>
+                  {#if geocoding}
+                    <SpinnerGapIcon size={12} class="animate-spin text-muted-foreground" />
+                  {/if}
+                </div>
+                <button
+                  class="p-1 hover:bg-muted rounded-lg text-muted-foreground transition-colors"
+                  on:click={closeLocationMap}
+                  title="Close map"
+                >
+                  <XCircleIcon size={16} />
+                </button>
+              </div>
+
+              <!-- Leaflet map container -->
+              <div
+                bind:this={locationMapContainer}
+                style="height: 280px; width: 100%;"
+              ></div>
+
+              <!-- Address field + save -->
+              <div class="p-4 border-t border-border bg-card space-y-3">
+                <div>
+                  <label class="block text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wider">
+                    Address
+                  </label>
+                  <input
+                    class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                    bind:value={locationAddress}
+                    placeholder="Address will auto-fill when you pin a location…"
+                  />
+                  <p class="text-[11px] text-muted-foreground mt-1">
+                    You can also edit this address manually
+                  </p>
+                </div>
+
+                {#if locationLat && locationLng}
+                  <p class="text-[11px] text-muted-foreground flex items-center gap-1">
+                    <MapPinIcon size={10} weight="fill" style="color:#FF6B35;" />
+                    {locationLat.toFixed(6)}, {locationLng.toFixed(6)}
+                  </p>
+                {/if}
+
+                <div class="flex gap-2">
+                  <button
+                    class="flex-1 border border-border py-2.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+                    on:click={closeLocationMap}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    class="flex-1 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
+                    style="background:#FF6B35;"
+                    on:click={saveLocation}
+                    disabled={savingLocation || !locationLat || !locationLng}
+                  >
+                    {#if savingLocation}
+                      <SpinnerGapIcon size={14} class="animate-spin" />Saving…
+                    {:else}
+                      <CheckCircleIcon size={14} weight="fill" />Save Location
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            </div>
+          {/if}
+        </div>
+        <!-- ── END LOCATION SECTION ─────────────────────────────────────────── -->
+
       </div>
 
     <!-- ══════════ SECURITY ════════════════════════════════════════════════════ -->
@@ -626,7 +1056,6 @@
         </button>
         <h1 class="text-xl font-bold mb-6">Security</h1>
 
-        <!-- Change password -->
         <div class="bg-card border border-border rounded-2xl p-5 mb-4">
           <h2 class="font-bold text-sm mb-4 flex items-center gap-2">
             <ShieldCheckIcon size={16} style="color:#3B82F6;" weight="duotone" />Change Password
@@ -643,7 +1072,6 @@
           </div>
         </div>
 
-        <!-- Delete account -->
         <div class="bg-card border border-red-200 dark:border-red-950 rounded-2xl p-5">
           <h2 class="font-bold text-sm text-red-500 mb-1 flex items-center gap-2">
             <TrashIcon size={16} weight="fill" />Delete Account
@@ -666,7 +1094,6 @@
         <h1 class="text-xl font-bold mb-2">Transaction History</h1>
         <p class="text-sm text-muted-foreground mb-6">Your complete order and payment history.</p>
 
-        <!-- Summary cards -->
         {#if !txLoading}
           <div class="grid grid-cols-2 gap-3 mb-6">
             <div class="bg-card border border-border rounded-2xl p-4">
@@ -705,7 +1132,6 @@
           </div>
         {/if}
 
-        <!-- Tabs (business only) -->
         {#if isBusiness}
           <div class="flex border border-border rounded-xl overflow-hidden mb-5">
             <button
@@ -721,7 +1147,6 @@
           </div>
         {/if}
 
-        <!-- Order list -->
         {#if txLoading}
           <div class="space-y-3">
             {#each Array(5) as _}
@@ -747,13 +1172,11 @@
               <div class="bg-card border border-border rounded-2xl p-4 hover:border-border/60 transition-colors">
                 <div class="flex items-start justify-between gap-3 mb-2">
                   <div class="flex-1 min-w-0">
-                    <!-- Counter-party name -->
                     <p class="text-xs font-medium text-muted-foreground mb-0.5">
                       {txTab === 'purchases'
                         ? (order.expand?.seller?.businessName || order.expand?.seller?.username || 'Seller')
                         : (order.expand?.buyer?.username || 'Customer')}
                     </p>
-                    <!-- Items summary -->
                     <p class="text-sm font-semibold text-foreground truncate">
                       {(order.items || []).map(i => `${i.quantity}× ${i.name}`).join(', ') || 'Order'}
                     </p>
@@ -778,9 +1201,7 @@
                       <span class="text-[10px] text-muted-foreground">Cash</span>
                     {/if}
                   </div>
-                  <div class="flex items-center gap-1">
-                    <div class="w-1.5 h-1.5 rounded-full" style="background:{st.dot};"></div>
-                  </div>
+                  <div class="w-1.5 h-1.5 rounded-full" style="background:{st.dot};"></div>
                 </div>
 
                 {#if order.notes}
@@ -789,6 +1210,69 @@
                   </p>
                 {/if}
               </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+    <!-- ══════════ FAVOURITES ═════════════════════════════════════════════════ -->
+    {:else if activePage === 'favorites'}
+      <div class="max-w-2xl mx-auto px-4 py-8">
+        <button class="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground mb-6 transition-colors"
+          on:click={() => activePage = 'hub'}>
+          <ArrowLeftIcon size={16} />Back to Settings
+        </button>
+        <h1 class="text-xl font-bold mb-2">Favourites</h1>
+        <p class="text-sm text-muted-foreground mb-6">Dishes you saved from menus.</p>
+
+        {#if favoritesLoading}
+          <div class="space-y-3">
+            {#each Array(5) as _}
+              <div class="h-20 bg-card border border-border rounded-2xl skeleton"></div>
+            {/each}
+          </div>
+        {:else if favorites.length === 0}
+          <div class="flex flex-col items-center py-20 text-center">
+            <div class="w-14 h-14 rounded-2xl flex items-center justify-center mb-4" style="background:#EF444415;">
+              <HeartIcon size={28} weight="duotone" style="color:#EF4444;" />
+            </div>
+            <p class="font-semibold mb-1">No favourites yet</p>
+            <p class="text-sm text-muted-foreground">Tap the heart on a dish to save it here.</p>
+          </div>
+        {:else}
+          <div class="space-y-2">
+            {#each favorites as favorite (favorite.id)}
+              {@const item = favoriteItem(favorite)}
+              {@const seller = favoriteSeller(item)}
+              {#if item}
+                <div class="bg-card border border-border rounded-2xl p-4 flex items-center gap-3">
+                  {#if item.image}
+                    <img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-14 h-14 rounded-xl object-cover flex-shrink-0"/>
+                  {:else}
+                    <div class="w-14 h-14 rounded-xl bg-muted flex items-center justify-center text-xl flex-shrink-0">🍽️</div>
+                  {/if}
+                  <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-sm truncate">{item.name}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                      <span class="text-sm font-bold" style="color:#FF6B35;">Rs. {item.price}</span>
+                      {#if item.isAvailable === false}
+                        <span class="text-xs text-muted-foreground">(Unavailable)</span>
+                      {/if}
+                    </div>
+                    {#if seller}
+                      <p class="text-xs text-muted-foreground truncate">by {seller.businessName || seller.username}</p>
+                    {/if}
+                  </div>
+                  <button
+                    class="w-10 h-10 rounded-full border border-red-200 dark:border-red-950 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex-shrink-0"
+                    on:click={() => removeFavorite(favorite)}
+                    title="Remove from favourites"
+                    aria-label="Remove from favourites"
+                  >
+                    <HeartIcon size={18} weight="fill" style="color:#EF4444;" />
+                  </button>
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}

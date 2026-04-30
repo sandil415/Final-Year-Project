@@ -1,73 +1,87 @@
 <script>
   import pb from '$lib/pocketbase';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { requireAuth } from '$lib/auth';
   import Header from '$lib/components/Header.svelte';
-  import {
-    CookingPotIcon,
-    BookOpenIcon,
-    ClockIcon,
-    CheckCircleIcon,
-    ShoppingBagIcon,
-    XCircleIcon,
-    ChartBarIcon,
-    WarningCircleIcon,
-    CalendarIcon,
-    ArrowRightIcon,
-  } from 'phosphor-svelte';
+  import { ShoppingBag, BookOpenIcon, ChartBarIcon, TrendingUp, Clock, CheckCircle, XCircle, ChefHat, AlertTriangle, RotateCcw, Banknote, CreditCard, X } from 'lucide-svelte';
 
   let user = null;
   let orders = [];
   let menuCount = 0;
   let loading = true;
   let activeTab = 'pending';
-  let updatingOrderId = null;
-  let toast = null;
-  let unsubscribe = null;
 
-  // 7-day window: orders created in the last 7 days
-  const SEVEN_DAYS_AGO = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  // Graph state
+  let graphRange = '7'; // '7' | '14' | '30'
 
-  const tabs = [
-    { key: 'scheduled',  label: 'Scheduled'  },
-    { key: 'pending',    label: 'Pending'     },
-    { key: 'confirmed',  label: 'Confirmed'   },
-    { key: 'preparing',  label: 'Preparing'   },
-    { key: 'ready',      label: 'Ready'       },
-    { key: 'delivered',  label: 'Delivered'   },
-    { key: 'cancelled',  label: 'Cancelled'   },
-  ];
+  // ── Refund modal state ────────────────────────────────────────────────────────
+  let showRefundModal = false;
+  let refundOrder = null;       // the order being cancelled
+  let refundEsewaId = '';       // seller fills in buyer's eSewa ID for manual refund
+  let refundNote = '';
+  let processingRefund = false;
 
-  const statusStyle = {
-    scheduled: { bg: '#EDE9FE', text: '#5B21B6', dot: '#8B5CF6' },
-    pending:   { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
-    confirmed: { bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
-    preparing: { bg: '#EDE9FE', text: '#5B21B6', dot: '#8B5CF6' },
-    ready:     { bg: '#D1FAE5', text: '#065F46', dot: '#10B981' },
-    delivered: { bg: '#F3F4F6', text: '#6B7280', dot: '#9CA3AF' },
-    cancelled: { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
+  // ── Cancel confirm modal (COD) ────────────────────────────────────────────────
+  let showCancelModal = false;
+  let cancelOrder = null;
+  let cancelReason = '';
+  let processingCancel = false;
+
+  const tabs = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
+
+  const statusColors = {
+    pending:   'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+    confirmed: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    preparing: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+    ready:     'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    delivered: 'bg-muted text-muted-foreground',
+    cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
   };
 
   const nextStatus = {
-    scheduled: 'pending',
     pending:   'confirmed',
     confirmed: 'preparing',
     preparing: 'ready',
     ready:     'delivered',
   };
 
-  const nextLabel = {
-    scheduled: 'Accept',
-    pending:   'Confirm',
-    confirmed: 'Preparing',
+  const nextStatusLabel = {
+    pending:   'Confirm Order',
+    confirmed: 'Start Preparing',
     preparing: 'Mark Ready',
-    ready:     'Delivered',
+    ready:     'Mark Delivered',
   };
 
-  function showToast(msg, type = 'success') {
-    toast = { msg, type };
-    setTimeout(() => (toast = null), 3000);
+  // ── Payment method helpers ────────────────────────────────────────────────────
+  function getPaymentMethod(order) {
+    // Set by eSewa success page or cash-on-delivery placement
+    return order.paymentMethod || order.payment_method || 'cash';
+  }
+
+  function isPrepaid(order) {
+    const pm = getPaymentMethod(order);
+    return pm === 'esewa' || pm === 'khalti' || pm === 'fonepay';
+  }
+
+  // An order that was prepaid AND is being cancelled needs a refund
+  function needsRefund(order) {
+    return isPrepaid(order) && order.status !== 'delivered' && order.status !== 'cancelled';
+  }
+
+  // Can the seller still cancel this order?
+  // Business rule: cancellable from accepted (confirmed) all the way to ready, but NOT after delivered
+  function isCancellable(order) {
+    return ['pending', 'confirmed', 'preparing', 'ready'].includes(order.status);
+  }
+
+  // Refund status badge text
+  function refundBadge(order) {
+    const rs = order.refundStatus;
+    if (!rs || rs === 'none') return null;
+    if (rs === 'pending') return { label: 'Refund Pending', color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' };
+    if (rs === 'sent')    return { label: 'Refund Sent', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' };
+    return null;
   }
 
   onMount(async () => {
@@ -77,430 +91,771 @@
     await Promise.all([loadOrders(), loadMenuCount()]);
     loading = false;
 
-    unsubscribe = await pb.collection('orders').subscribe('*', async (e) => {
+    pb.collection('orders').subscribe('*', async (e) => {
       if (e.record.seller === user.id) await loadOrders();
     });
   });
 
-  onDestroy(() => { unsubscribe?.(); });
-
   async function loadOrders() {
     try {
-      // Only fetch orders from the last 7 days
-      const since = SEVEN_DAYS_AGO.toISOString();
       const result = await pb.collection('orders').getFullList({
-        filter: `seller.id = "${user.id}" && created >= "${since}"`,
+        filter: `seller.id = "${user.id}"`,
         sort: '-created',
-        expand: 'buyer',
+        expand: 'buyer'
       });
       orders = result;
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   async function loadMenuCount() {
     try {
       const r = await pb.collection('menuItems').getList(1, 1, {
-        filter: `seller = "${user.id}"`,
+        filter: `seller = "${user.id}"`
       });
       menuCount = r.totalItems;
-    } catch (_) { menuCount = 0; }
+    } catch (e) { menuCount = 0; }
   }
 
+  // ── Advance order status (non-cancel) ────────────────────────────────────────
   async function updateOrderStatus(order, status) {
-    updatingOrderId = order.id;
     try {
       await pb.collection('orders').update(order.id, { status });
       orders = orders.map(o => o.id === order.id ? { ...o, status } : o);
-      showToast(`Order marked as ${status} ✓`);
-    } catch (_) {
-      showToast('Failed to update order', 'error');
-    } finally {
-      updatingOrderId = null;
+    } catch (e) {
+      console.error('Order update failed:', e);
+      return;
     }
-
-    // Notify buyer (non-blocking)
-    pb.collection('notifications').create({
-      user: order.expand?.buyer?.id || order.buyer,
-      triggeredBy: user.id,
-      type: status === 'cancelled' ? 'orderCancelled' : 'orderAccepted',
-      message: `Your order from ${user.businessName} is now ${status}.`,
-      read: false,
-    }).catch(() => {});
+    try {
+      await pb.collection('notifications').create({
+        user: order.expand?.buyer?.id || order.buyer,
+        triggeredBy: user.id,
+        type: 'orderAccepted',
+        message: `Your order from ${user.businessName} is now ${status}.`,
+        read: false
+      });
+    } catch (notifErr) {
+      console.error('Notification failed:', notifErr?.response?.data);
+    }
   }
 
-  async function cancelOrder(order) { await updateOrderStatus(order, 'cancelled'); }
+  // ── CANCEL FLOW ───────────────────────────────────────────────────────────────
+  // Entry point — decide which modal to show
+  function initCancel(order) {
+    if (needsRefund(order)) {
+      // eSewa / online payment — need refund modal
+      refundOrder = order;
+      refundEsewaId = '';
+      refundNote = '';
+      showRefundModal = true;
+    } else {
+      // Cash on delivery — simple confirm modal
+      cancelOrder = order;
+      cancelReason = '';
+      showCancelModal = true;
+    }
+  }
 
-  // ── Derived ──────────────────────────────────────────────────────────────────
+  // COD cancel — no money to return
+  async function confirmCodCancel() {
+    if (!cancelOrder || processingCancel) return;
+    processingCancel = true;
+    try {
+      await pb.collection('orders').update(cancelOrder.id, {
+        status: 'cancelled',
+        cancellationReason: cancelReason || 'Cancelled by seller',
+        refundStatus: 'none',
+      });
+      orders = orders.map(o => o.id === cancelOrder.id
+        ? { ...o, status: 'cancelled', refundStatus: 'none' }
+        : o
+      );
+      // Notify buyer
+      await pb.collection('notifications').create({
+        user: cancelOrder.expand?.buyer?.id || cancelOrder.buyer,
+        triggeredBy: user.id,
+        type: 'orderCancelled',
+        message: `Your order from ${user.businessName} has been cancelled.${cancelReason ? ' Reason: ' + cancelReason : ''} No payment was taken.`,
+        read: false,
+      }).catch(() => {});
+    } catch (e) {
+      console.error('Cancel failed:', e);
+    } finally {
+      processingCancel = false;
+      showCancelModal = false;
+      cancelOrder = null;
+    }
+  }
+
+  // eSewa cancel — mark refund as pending, notify buyer with transaction code
+  async function confirmEsewaCancel() {
+    if (!refundOrder || processingRefund) return;
+    processingRefund = true;
+
+    const txCode = refundOrder.esewaTransactionCode || refundOrder.transactionId || '—';
+    const amount = refundOrder.totalAmount;
+    const buyerName = refundOrder.expand?.buyer?.username || 'Customer';
+
+    try {
+      await pb.collection('orders').update(refundOrder.id, {
+        status: 'cancelled',
+        cancellationReason: refundNote || 'Cancelled by seller',
+        refundStatus: 'pending',
+        refundEsewaId: refundEsewaId || '',
+      });
+      orders = orders.map(o => o.id === refundOrder.id
+        ? { ...o, status: 'cancelled', refundStatus: 'pending', refundEsewaId }
+        : o
+      );
+
+      // Notify buyer: give them all the details they need to follow up
+      await pb.collection('notifications').create({
+        user: refundOrder.expand?.buyer?.id || refundOrder.buyer,
+        triggeredBy: user.id,
+        type: 'orderCancelled',
+        message: `Your order from ${user.businessName} was cancelled. A refund of Rs. ${amount} will be sent to your eSewa account. eSewa Tx: ${txCode}. Please contact the seller if you don't receive it within 24 hrs.`,
+        read: false,
+      }).catch(() => {});
+
+    } catch (e) {
+      console.error('Refund cancel failed:', e);
+    } finally {
+      processingRefund = false;
+      showRefundModal = false;
+      refundOrder = null;
+    }
+  }
+
+  // Seller marks refund as actually sent (after they've transferred via eSewa app)
+  async function markRefundSent(order) {
+    try {
+      await pb.collection('orders').update(order.id, { refundStatus: 'sent' });
+      orders = orders.map(o => o.id === order.id ? { ...o, refundStatus: 'sent' } : o);
+
+      await pb.collection('notifications').create({
+        user: order.expand?.buyer?.id || order.buyer,
+        triggeredBy: user.id,
+        type: 'orderAccepted', // closest type for positive update
+        message: `${user.businessName} has sent your refund of Rs. ${order.totalAmount} via eSewa. Please check your eSewa account.`,
+        read: false,
+      }).catch(() => {});
+    } catch (e) {
+      console.error('Mark refund sent failed:', e);
+    }
+  }
+
+  // ── Derived ───────────────────────────────────────────────────────────────────
   $: filteredOrders = orders.filter(o => o.status === activeTab);
   $: pendingCount   = orders.filter(o => o.status === 'pending').length;
-  $: scheduledCount = orders.filter(o => o.status === 'scheduled').length;
+  $: refundPendingCount = orders.filter(o => o.refundStatus === 'pending').length;
 
-  $: tabCounts = tabs.reduce((acc, t) => {
-    acc[t.key] = orders.filter(o => o.status === t.key).length;
-    return acc;
-  }, {});
-
-  $: todayDelivered = orders.filter(o =>
-    o.status === 'delivered' &&
-    new Date(o.created).toDateString() === new Date().toDateString()
-  ).length;
-
-  $: weekRevenue = orders
-    .filter(o => o.status === 'delivered')
-    .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-
-  $: todayRevenue = orders
-    .filter(o => o.status === 'delivered' &&
-      new Date(o.created).toDateString() === new Date().toDateString())
-    .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-
-  function formatTime(d) {
-    return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  function formatDate(d) {
-    const date = new Date(d);
-    const today = new Date();
-    if (date.toDateString() === today.toDateString()) return 'Today';
-    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-  }
-
-  function formatScheduled(d) {
-    if (!d) return '—';
-    return new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  }
-
-  function itemsSummary(items) {
-    if (!items?.length) return '—';
-    return items.map(i => `${i.quantity}× ${i.name}`).join(', ');
-  }
-
-  function daysUntil(d) {
-    if (!d) return null;
-    const diff = new Date(d) - new Date();
-    const days = Math.ceil(diff / 86400000);
-    if (days <= 0) return 'today';
-    if (days === 1) return 'tomorrow';
-    return `in ${days} days`;
-  }
-
-  // Window label for display
-  const windowLabel = (() => {
-    const from = SEVEN_DAYS_AGO.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    const to   = new Date().toLocaleDateString([], { month: 'short', day: 'numeric' });
-    return `${from} – ${to}`;
+  // ── Income graph ──────────────────────────────────────────────────────────────
+  $: incomeData = (() => {
+    const days = parseInt(graphRange);
+    const buckets = {};
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      buckets[d.toLocaleDateString('en-CA')] = 0;
+    }
+    for (const order of orders) {
+      if (order.status !== 'delivered') continue;
+      const key = new Date(order.created).toLocaleDateString('en-CA');
+      if (key in buckets) {
+        buckets[key] = (buckets[key] || 0) + (order.totalAmount || 0);
+      }
+    }
+    return Object.entries(buckets).map(([date, amount]) => ({
+      date,
+      label: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      amount,
+    }));
   })();
+
+  $: maxIncome   = Math.max(...incomeData.map(d => d.amount), 1);
+  $: totalIncome = incomeData.reduce((s, d) => s + d.amount, 0);
+  $: avgIncome   = incomeData.length ? totalIncome / incomeData.length : 0;
+
+  let hoveredBar = null;
+  let tooltipX = 0;
+  let tooltipY = 0;
+
+  function onBarEnter(e, bar) { hoveredBar = bar; tooltipX = e.clientX; tooltipY = e.clientY; }
+  function onBarLeave()       { hoveredBar = null; }
+  function onBarMove(e)       { if (hoveredBar) { tooltipX = e.clientX; tooltipY = e.clientY; } }
+
+  function formatTime(dateString) {
+    return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function formatDate(dateString) {
+    return new Date(dateString).toLocaleDateString();
+  }
 </script>
 
-<!-- ── TOAST ─────────────────────────────────────────────────────────────────── -->
-{#if toast}
-  <div class="fixed top-5 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-5 py-3 rounded-xl shadow-2xl text-sm font-semibold text-white pointer-events-none"
-    style={toast.type === 'error' ? 'background:#EF4444;' : 'background:#16a34a;'}>
-    {#if toast.type === 'error'}
-      <WarningCircleIcon size={16} weight="fill" />
-    {:else}
-      <CheckCircleIcon size={16} weight="fill" />
-    {/if}
-    {toast.msg}
+<!-- ── Tooltip ─────────────────────────────────────────────────────────────────── -->
+{#if hoveredBar}
+  <div
+    class="fixed z-50 pointer-events-none px-3 py-2 rounded-lg text-xs font-semibold text-white shadow-xl"
+    style="left: {tooltipX + 12}px; top: {tooltipY - 40}px; background-color: #FF6B35;"
+  >
+    <div>{hoveredBar.label}</div>
+    <div>Rs. {hoveredBar.amount.toFixed(2)}</div>
   </div>
 {/if}
 
+<!-- ══════════════════════════════════════════════════════════════════════════════
+     COD CANCEL MODAL
+══════════════════════════════════════════════════════════════════════════════ -->
+{#if showCancelModal && cancelOrder}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" on:click={() => { if (!processingCancel) showCancelModal = false; }} role="presentation"></div>
+
+    <div class="relative z-10 bg-background border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-full bg-red-100 dark:bg-red-950/30 flex items-center justify-center flex-shrink-0">
+            <XCircle class="w-5 h-5 text-red-500" />
+          </div>
+          <div>
+            <h2 class="font-bold text-base">Cancel Order</h2>
+            <p class="text-xs text-muted-foreground">Cash on Delivery — no refund needed</p>
+          </div>
+        </div>
+        <button class="p-1.5 hover:bg-muted rounded-lg" disabled={processingCancel} on:click={() => showCancelModal = false}>
+          <X class="w-4 h-4 text-muted-foreground" />
+        </button>
+      </div>
+
+      <div class="p-5 space-y-4">
+        <!-- Order summary -->
+        <div class="p-3 rounded-xl bg-muted/50 border border-border space-y-1 text-sm">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Customer</span>
+            <span class="font-semibold">{cancelOrder.expand?.buyer?.username || 'Customer'}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Amount</span>
+            <span class="font-bold">Rs. {cancelOrder.totalAmount?.toFixed(2)}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Payment</span>
+            <span class="flex items-center gap-1 font-medium">
+              <Banknote class="w-3.5 h-3.5 text-muted-foreground" />Cash on Delivery
+            </span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Status</span>
+            <span class="capitalize font-medium">{cancelOrder.status}</span>
+          </div>
+        </div>
+
+        <!-- Info callout -->
+        <div class="flex gap-3 p-3 rounded-xl bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
+          <AlertTriangle class="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+          <p class="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+            This is a <strong>Cash on Delivery</strong> order. No payment has been collected yet,
+            so no refund is required. The customer will simply be notified of the cancellation.
+          </p>
+        </div>
+
+        <!-- Reason -->
+        <div>
+          <label class="block text-sm font-medium mb-1">Cancellation reason <span class="text-muted-foreground font-normal">(optional)</span></label>
+          <textarea
+            rows="2"
+            class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm resize-none"
+            bind:value={cancelReason}
+            placeholder="e.g. Out of stock, unable to prepare…"
+            disabled={processingCancel}
+          />
+        </div>
+      </div>
+
+      <div class="flex gap-2 px-5 pb-5">
+        <button
+          class="flex-1 border border-border py-2.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+          disabled={processingCancel}
+          on:click={() => showCancelModal = false}
+        >
+          Keep Order
+        </button>
+        <button
+          class="flex-1 py-2.5 rounded-xl text-white text-sm font-semibold bg-red-500 hover:bg-red-600 transition-colors disabled:opacity-50"
+          disabled={processingCancel}
+          on:click={confirmCodCancel}
+        >
+          {processingCancel ? 'Cancelling…' : 'Cancel Order'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ══════════════════════════════════════════════════════════════════════════════
+     ESEWA REFUND MODAL
+══════════════════════════════════════════════════════════════════════════════ -->
+{#if showRefundModal && refundOrder}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" on:click={() => { if (!processingRefund) showRefundModal = false; }} role="presentation"></div>
+
+    <div class="relative z-10 bg-background border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style="background-color: #FF6B3520;">
+            <RotateCcw class="w-5 h-5" style="color: #FF6B35;" />
+          </div>
+          <div>
+            <h2 class="font-bold text-base">Cancel & Initiate Refund</h2>
+            <p class="text-xs text-muted-foreground">eSewa payment — refund required</p>
+          </div>
+        </div>
+        <button class="p-1.5 hover:bg-muted rounded-lg" disabled={processingRefund} on:click={() => showRefundModal = false}>
+          <X class="w-4 h-4 text-muted-foreground" />
+        </button>
+      </div>
+
+      <div class="p-5 space-y-4">
+        <!-- Order summary -->
+        <div class="p-3 rounded-xl bg-muted/50 border border-border space-y-1 text-sm">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Customer</span>
+            <span class="font-semibold">{refundOrder.expand?.buyer?.username || 'Customer'}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Refund Amount</span>
+            <span class="font-bold text-green-600">Rs. {refundOrder.totalAmount?.toFixed(2)}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Payment</span>
+            <span class="flex items-center gap-1 font-medium" style="color:#60BB46;">
+              <CreditCard class="w-3.5 h-3.5" />eSewa
+            </span>
+          </div>
+          {#if refundOrder.esewaTransactionCode}
+            <div class="flex justify-between">
+              <span class="text-muted-foreground">eSewa Tx Code</span>
+              <span class="font-mono text-xs font-bold">{refundOrder.esewaTransactionCode}</span>
+            </div>
+          {/if}
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">Order Status</span>
+            <span class="capitalize font-medium">{refundOrder.status}</span>
+          </div>
+        </div>
+
+        <!-- Warning callout -->
+        <div class="flex gap-3 p-3 rounded-xl bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800">
+          <AlertTriangle class="w-4 h-4 text-orange-500 flex-shrink-0 mt-0.5" />
+          <div class="text-xs text-orange-700 dark:text-orange-300 leading-relaxed space-y-1">
+            <p><strong>This order was paid via eSewa.</strong> By cancelling, you are responsible for returning Rs. {refundOrder.totalAmount?.toFixed(2)} to the customer.</p>
+            <p>After cancelling, send the refund via your eSewa app to the customer's eSewa ID and then click "Mark Refund Sent".</p>
+          </div>
+        </div>
+
+        <!-- Buyer's eSewa ID (optional — seller may already know it) -->
+        <div>
+          <label class="block text-sm font-medium mb-1">
+            Customer's eSewa ID / Phone
+            <span class="text-muted-foreground font-normal">(optional — to help you transfer)</span>
+          </label>
+          <input
+            type="text"
+            class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm"
+            bind:value={refundEsewaId}
+            placeholder="e.g. 98XXXXXXXX"
+            disabled={processingRefund}
+          />
+          <p class="text-xs text-muted-foreground mt-1">
+            This is saved on the order for your reference. The customer will be notified with the eSewa transaction code.
+          </p>
+        </div>
+
+        <!-- Reason -->
+        <div>
+          <label class="block text-sm font-medium mb-1">Cancellation reason <span class="text-muted-foreground font-normal">(optional)</span></label>
+          <textarea
+            rows="2"
+            class="w-full border border-border rounded-xl px-3 py-2 bg-background text-foreground text-sm resize-none"
+            bind:value={refundNote}
+            placeholder="e.g. Ingredient unavailable, unable to fulfil…"
+            disabled={processingRefund}
+          />
+        </div>
+      </div>
+
+      <div class="flex gap-2 px-5 pb-5">
+        <button
+          class="flex-1 border border-border py-2.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+          disabled={processingRefund}
+          on:click={() => showRefundModal = false}
+        >
+          Keep Order
+        </button>
+        <button
+          class="flex-1 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
+          style="background-color: #FF6B35;"
+          disabled={processingRefund}
+          on:click={confirmEsewaCancel}
+        >
+          {processingRefund ? 'Processing…' : 'Cancel & Flag Refund'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ══════════════════════════════════════════════════════════════════════════════
+     PAGE
+══════════════════════════════════════════════════════════════════════════════ -->
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
   <Header />
-
   <main class="flex-1 overflow-y-auto">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+    <div class="max-w-5xl mx-auto p-6">
 
-      <!-- ── PAGE HEADER ── -->
-      <div class="flex items-center justify-between">
+      <!-- Dashboard header -->
+      <div class="flex items-center justify-between mb-8">
         <div>
-          <div class="flex items-center gap-2 mb-0.5">
-            <CookingPotIcon size={15} weight="fill" style="color:#FF6B35;" />
-            <span class="text-xs font-medium text-muted-foreground tracking-wide uppercase">Business Dashboard</span>
+          <div class="flex items-center gap-2 mb-1">
+            <ChefHat class="w-5 h-5" style="color: #FF6B35;" />
+            <span class="text-sm font-medium text-muted-foreground">Business Dashboard</span>
           </div>
           <h1 class="text-2xl font-bold">{user?.businessName || 'My Business'}</h1>
         </div>
         <div class="flex items-center gap-2">
           <button
-            class="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors"
+            class="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90 bg-[hsl(var(--app-primary))]"
             on:click={() => goto('/business/analytics')}
           >
-            <ChartBarIcon size={15} weight="duotone" />Analytics
+            <ChartBarIcon size={15} weight="duotone" /> Analytics
           </button>
+
           <button
-            class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90"
-            style="background:#FF6B35;"
+            class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90 bg-[hsl(var(--app-primary))]"
             on:click={() => goto('/business/menu')}
           >
-            <BookOpenIcon size={15} weight="fill" />Manage Menu
+            <BookOpenIcon size={15} weight="fill" /> Manage Menu
           </button>
         </div>
       </div>
 
-      <!-- ── STAT CARDS ── -->
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div class="bg-card border border-border rounded-2xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-medium text-muted-foreground">Pending</span>
-            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#FEF3C720;">
-              <ClockIcon size={15} weight="duotone" style="color:#F59E0B;" />
-            </div>
+      <!-- Refund alert banner -->
+      {#if refundPendingCount > 0}
+        <div class="flex items-center gap-3 mb-6 p-4 rounded-2xl border-2 border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-950/20">
+          <RotateCcw class="w-5 h-5 flex-shrink-0" style="color: #FF6B35;" />
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-semibold text-orange-700 dark:text-orange-400">
+              {refundPendingCount} refund{refundPendingCount > 1 ? 's' : ''} pending
+            </p>
+            <p class="text-xs text-orange-600 dark:text-orange-400 mt-0.5">
+              You have eSewa refunds that haven't been marked as sent. Please transfer and mark them below.
+            </p>
           </div>
-          <p class="text-2xl font-bold">{pendingCount}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">need action</p>
+          <button
+            class="flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg text-white hover:opacity-90"
+            style="background-color: #FF6B35;"
+            on:click={() => activeTab = 'cancelled'}
+          >
+            View →
+          </button>
         </div>
+      {/if}
 
-        <div class="bg-card border border-border rounded-2xl p-4 {scheduledCount > 0 ? 'ring-1 ring-purple-300 dark:ring-purple-800' : ''}">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-medium text-muted-foreground">Scheduled</span>
-            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#EDE9FE20;">
-              <CalendarIcon size={15} weight="duotone" style="color:#8B5CF6;" />
+      <!-- Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {#each [
+          { label: 'Pending',        value: orders.filter(o => o.status === 'pending').length,    icon: Clock,        color: '#F59E0B' },
+          { label: 'Preparing',      value: orders.filter(o => o.status === 'preparing').length,  icon: ChefHat,      color: '#8B5CF6' },
+          { label: 'Delivered Today',value: orders.filter(o => o.status === 'delivered' && formatDate(o.created) === formatDate(new Date())).length, icon: CheckCircle, color: '#10B981' },
+          { label: 'Menu Items',     value: menuCount, icon: BookOpenIcon, color: '#FF6B35' },
+        ] as stat}
+          {@const Icon = stat.icon}
+          <div class="bg-card border border-border rounded-2xl p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm text-muted-foreground">{stat.label}</span>
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background-color: {stat.color}20;">
+                <Icon class="w-4 h-4" style="color: {stat.color};" />
+              </div>
             </div>
+            <p class="text-2xl font-bold text-foreground">{stat.value}</p>
           </div>
-          <p class="text-2xl font-bold">{scheduledCount}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">upcoming</p>
-        </div>
-
-        <div class="bg-card border border-border rounded-2xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-medium text-muted-foreground">Delivered Today</span>
-            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#D1FAE520;">
-              <CheckCircleIcon size={15} weight="duotone" style="color:#10B981;" />
-            </div>
-          </div>
-          <p class="text-2xl font-bold">{todayDelivered}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">Rs.{todayRevenue.toFixed(0)} today</p>
-        </div>
-
-        <div class="bg-card border border-border rounded-2xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-medium text-muted-foreground">7-Day Revenue</span>
-            <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#FF6B3520;">
-              <ChartBarIcon size={15} weight="duotone" style="color:#FF6B35;" />
-            </div>
-          </div>
-          <p class="text-2xl font-bold">Rs.{weekRevenue.toFixed(0)}</p>
-          <p class="text-xs text-muted-foreground mt-0.5">{menuCount} menu items</p>
-        </div>
+        {/each}
       </div>
 
-      <!-- ── ORDERS PANEL ── -->
-      <!--
-        Fixed-height panel with scrollable order list.
-        The header, tab bar, and column headers are sticky (flex-shrink-0).
-        Only the order rows area scrolls.
-      -->
-      <div class="bg-card border border-border rounded-2xl overflow-hidden flex flex-col" style="height:520px;">
-
-        <!-- Panel header -->
-        <div class="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-          <div class="flex items-center gap-2 min-w-0">
-            <h2 class="font-bold text-sm">Orders</h2>
-            <!-- 7-day window badge -->
-            <div class="flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-[10px] font-medium text-muted-foreground flex-shrink-0">
-              <CalendarIcon size={10} />
-              {windowLabel}
-            </div>
-          </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <!-- View full history link -->
-            <button
-              class="flex items-center gap-1 text-[11px] font-medium hover:opacity-70 transition-opacity"
-              style="color:#FF6B35;"
-              on:click={() => goto('/profile/edit')}
-            >
-              Full history <ArrowRightIcon size={11} />
-            </button>
-            {#if scheduledCount > 0}
-              <span class="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold text-white" style="background:#8B5CF6;">
-                <CalendarIcon size={10} weight="fill" />{scheduledCount} scheduled
+      <!-- Orders table -->
+      <div class="bg-card border border-border rounded-2xl overflow-hidden mb-6">
+        <div class="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h2 class="font-bold text-foreground">Orders</h2>
+          <div class="flex items-center gap-2">
+            {#if refundPendingCount > 0}
+              <span class="px-2.5 py-1 rounded-full text-xs font-bold text-white bg-orange-500">
+                {refundPendingCount} refund{refundPendingCount > 1 ? 's' : ''}
               </span>
             {/if}
             {#if pendingCount > 0}
-              <span class="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold text-white animate-pulse" style="background:#FF6B35;">
-                <ClockIcon size={10} weight="fill" />{pendingCount} new
+              <span class="px-2.5 py-1 rounded-full text-xs font-bold text-white" style="background-color: #FF6B35;">
+                {pendingCount} new
               </span>
             {/if}
           </div>
         </div>
 
-        <!-- Tab bar (sticky, no scroll of its own) -->
-        <div class="flex gap-1 px-3 py-2 border-b border-border bg-card flex-shrink-0 overflow-x-auto scrollbar-hide">
+        <!-- Tabs -->
+        <div class="flex gap-1 p-3 border-b border-border overflow-x-auto">
           {#each tabs as tab}
-            {@const count = tabCounts[tab.key] || 0}
             <button
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex-shrink-0 whitespace-nowrap"
-              style={activeTab === tab.key
-                ? tab.key === 'scheduled'
-                  ? 'background:#8B5CF6;color:white;'
-                  : 'background:#FF6B35;color:white;'
-                : 'color:hsl(var(--muted-foreground));'}
-              on:click={() => activeTab = tab.key}
+              class="px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors flex-shrink-0 {activeTab === tab ? 'text-white' : 'text-muted-foreground hover:bg-muted'}"
+              style={activeTab === tab ? 'background-color: #FF6B35;' : ''}
+              on:click={() => activeTab = tab}
             >
-              {tab.label}
-              {#if count > 0}
-                <span
-                  class="min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold inline-flex items-center justify-center"
-                  style={activeTab === tab.key
-                    ? 'background:rgba(255,255,255,0.25);color:white;'
-                    : tab.key === 'pending'
-                      ? 'background:#FF6B35;color:white;'
-                      : tab.key === 'scheduled'
-                        ? 'background:#8B5CF6;color:white;'
-                        : 'background:hsl(var(--muted));color:hsl(var(--muted-foreground));'}
-                >{count}</span>
+              {tab}
+              {#if tab === 'pending' && pendingCount > 0}
+                <span class="ml-1 w-4 h-4 rounded-full bg-white/30 text-xs inline-flex items-center justify-center">{pendingCount}</span>
+              {/if}
+              {#if tab === 'cancelled' && refundPendingCount > 0}
+                <span class="ml-1 w-4 h-4 rounded-full bg-orange-200/80 text-orange-800 text-xs inline-flex items-center justify-center">{refundPendingCount}</span>
               {/if}
             </button>
           {/each}
         </div>
 
-        <!-- Scrollable order list — THIS is the only scrolling element -->
-        <div class="flex-1 overflow-y-auto min-h-0">
-          {#if loading}
-            <!-- Skeleton rows -->
-            <div class="divide-y divide-border">
-              {#each Array(6) as _}
-                <div class="flex items-center gap-3 px-4 py-3">
-                  <div class="skeleton w-2 h-2 rounded-full flex-shrink-0"></div>
-                  <div class="flex-1 space-y-1.5">
-                    <div class="skeleton h-3 w-28 rounded"></div>
-                    <div class="skeleton h-2.5 w-44 rounded"></div>
-                  </div>
-                  <div class="skeleton h-7 w-20 rounded-lg"></div>
-                </div>
-              {/each}
-            </div>
+        {#if loading}
+          <div class="p-10 text-center text-muted-foreground">Loading orders...</div>
 
-          {:else if filteredOrders.length === 0}
-            <div class="flex flex-col items-center justify-center h-full py-10 text-center">
-              <div class="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-3">
-                {#if activeTab === 'scheduled'}
-                  <CalendarIcon size={22} weight="duotone" class="text-muted-foreground" />
-                {:else}
-                  <ShoppingBagIcon size={22} weight="duotone" class="text-muted-foreground" />
-                {/if}
-              </div>
-              <p class="font-medium text-sm text-foreground mb-1">No {activeTab} orders this week</p>
-              <p class="text-xs text-muted-foreground max-w-[200px]">
-                {activeTab === 'scheduled'
-                  ? 'Advance orders from customers appear here'
-                  : `Orders in "${activeTab}" state from the last 7 days`}
-              </p>
-            </div>
+        {:else if filteredOrders.length === 0}
+          <div class="p-10 text-center">
+            <ShoppingBag class="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <p class="text-muted-foreground text-sm">No {activeTab} orders</p>
+          </div>
 
-          {:else}
-            <!-- Column headers -->
-            <div class="grid px-4 py-2 border-b border-border/60 bg-muted/20 flex-shrink-0"
-              style="grid-template-columns: 14px 108px 1fr {activeTab === 'scheduled' ? '130px' : '68px'} auto;">
-              <div></div>
-              <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Customer</span>
-              <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Items</span>
-              {#if activeTab === 'scheduled'}
-                <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Scheduled For</span>
-              {:else}
-                <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Amount</span>
-              {/if}
-              <span class="text-[10px] font-bold text-muted-foreground uppercase tracking-wider text-right">Actions</span>
-            </div>
+        {:else}
+          <div class="divide-y divide-border">
+            {#each filteredOrders as order}
+              {@const pm = getPaymentMethod(order)}
+              {@const isPaid = isPrepaid(order)}
+              {@const rb = refundBadge(order)}
 
-            <!-- Order rows — scroll happens here -->
-            <div class="divide-y divide-border/60">
-              {#each filteredOrders as order (order.id)}
-                {@const st = statusStyle[order.status] || statusStyle.pending}
-                {@const isUpdating = updatingOrderId === order.id}
+              <div class="p-5">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1 min-w-0">
 
-                <div
-                  class="grid px-4 py-2.5 items-center hover:bg-muted/20 transition-colors {isUpdating ? 'opacity-60' : ''}"
-                  style="grid-template-columns: 14px 108px 1fr {activeTab === 'scheduled' ? '130px' : '68px'} auto;"
-                >
-                  <!-- Status dot -->
-                  <div class="w-2 h-2 rounded-full flex-shrink-0" style="background:{st.dot};"></div>
+                    <!-- Row 1: buyer + time + status + payment badge -->
+                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                      <span class="font-semibold text-sm text-foreground">
+                        {order.expand?.buyer?.username || 'Customer'}
+                      </span>
+                      <span class="text-xs text-muted-foreground">· {formatTime(order.created)}</span>
 
-                  <!-- Customer + time -->
-                  <div class="min-w-0 pr-2">
-                    <p class="text-xs font-semibold text-foreground truncate">
-                      {order.expand?.buyer?.username || 'Customer'}
-                    </p>
-                    <p class="text-[10px] text-muted-foreground leading-tight">
-                      {formatDate(order.created)} · {formatTime(order.created)}
-                    </p>
-                  </div>
+                      <!-- Order status -->
+                      <span class="px-2 py-0.5 rounded-full text-xs font-medium capitalize {statusColors[order.status]}">
+                        {order.status}
+                      </span>
 
-                  <!-- Items -->
-                  <div class="min-w-0 pr-3">
-                    <p class="text-xs text-foreground truncate">{itemsSummary(order.items)}</p>
-                    {#if order.notes}
-                      <p class="text-[10px] text-muted-foreground italic truncate">"{order.notes}"</p>
-                    {/if}
-                  </div>
-
-                  <!-- Amount or Scheduled time -->
-                  {#if activeTab === 'scheduled'}
-                    <div class="min-w-0 pr-2">
-                      {#if order.scheduledAt}
-                        <p class="text-xs font-semibold leading-tight" style="color:#8B5CF6;">{formatScheduled(order.scheduledAt)}</p>
-                        <p class="text-[10px] text-muted-foreground">{daysUntil(order.scheduledAt)}</p>
+                      <!-- Payment method badge -->
+                      {#if isPaid}
+                        <span class="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white" style="background-color: #60BB46;">
+                          <CreditCard class="w-3 h-3" />eSewa
+                        </span>
                       {:else}
-                        <p class="text-[10px] text-muted-foreground">No date set</p>
+                        <span class="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                          <Banknote class="w-3 h-3" />COD
+                        </span>
+                      {/if}
+
+                      <!-- Refund status badge -->
+                      {#if rb}
+                        <span class="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold {rb.color}">
+                          <RotateCcw class="w-3 h-3" />{rb.label}
+                        </span>
                       {/if}
                     </div>
-                  {:else}
-                    <div class="pr-2">
-                      <p class="text-xs font-bold text-foreground">Rs.{order.totalAmount?.toFixed(0)}</p>
-                      <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded-full capitalize leading-tight"
-                        style="background:{st.bg};color:{st.text};">{order.status}</span>
+
+                    <!-- Items list -->
+                    <div class="text-sm text-muted-foreground mb-2">
+                      {#each (order.items || []) as item, i}
+                        <span>{item.quantity}× {item.name}</span>
+                        {#if i < (order.items || []).length - 1}<span class="mx-1">·</span>{/if}
+                      {/each}
                     </div>
-                  {/if}
+
+                    <!-- Notes -->
+                    {#if order.notes}
+                      <p class="text-xs text-muted-foreground italic mb-2">Note: "{order.notes}"</p>
+                    {/if}
+
+                    <!-- Cancellation reason -->
+                    {#if order.status === 'cancelled' && order.cancellationReason}
+                      <p class="text-xs text-red-500 italic mb-2">Cancellation: "{order.cancellationReason}"</p>
+                    {/if}
+
+                    <!-- Refund details for cancelled eSewa orders -->
+                    {#if order.status === 'cancelled' && isPaid}
+                      <div class="mt-2 p-2.5 rounded-xl border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/20 text-xs space-y-1">
+                        <div class="flex items-center gap-1.5 font-semibold text-orange-700 dark:text-orange-400">
+                          <RotateCcw class="w-3.5 h-3.5" />
+                          Refund: Rs. {order.totalAmount?.toFixed(2)} via eSewa
+                        </div>
+                        {#if order.esewaTransactionCode}
+                          <div class="text-muted-foreground">eSewa Tx: <span class="font-mono font-bold">{order.esewaTransactionCode}</span></div>
+                        {/if}
+                        {#if order.refundEsewaId}
+                          <div class="text-muted-foreground">Customer eSewa: <span class="font-semibold">{order.refundEsewaId}</span></div>
+                        {/if}
+                        <div class="text-muted-foreground">
+                          Status: <span class="font-semibold {order.refundStatus === 'sent' ? 'text-green-600' : 'text-orange-600'}">
+                            {order.refundStatus === 'sent' ? '✓ Refund Sent' : '⏳ Refund Pending'}
+                          </span>
+                        </div>
+                      </div>
+                    {/if}
+
+                    <p class="text-sm font-bold text-foreground mt-2">Rs. {order.totalAmount?.toFixed(2)}</p>
+                  </div>
 
                   <!-- Action buttons -->
-                  <div class="flex items-center gap-1.5 justify-end flex-shrink-0">
+                  <div class="flex flex-col gap-2 flex-shrink-0">
+
+                    <!-- Advance status button -->
                     {#if nextStatus[order.status]}
                       <button
-                        class="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50 whitespace-nowrap transition-opacity"
-                        style={order.status === 'scheduled' ? 'background:#8B5CF6;' : 'background:#FF6B35;'}
-                        disabled={isUpdating}
+                        class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white hover:opacity-90 transition-opacity"
+                        style="background-color: #FF6B35;"
                         on:click={() => updateOrderStatus(order, nextStatus[order.status])}
                       >
-                        {isUpdating ? '…' : nextLabel[order.status]}
+                        {nextStatusLabel[order.status]}
                       </button>
                     {/if}
 
-                    {#if order.status !== 'delivered' && order.status !== 'cancelled'}
+                    <!-- Cancel button — only when order is still active -->
+                    {#if isCancellable(order)}
                       <button
-                        class="p-1.5 rounded-lg border border-red-200 dark:border-red-900 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-50"
-                        title="Cancel order"
-                        disabled={isUpdating}
-                        on:click={() => cancelOrder(order)}
+                        class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors
+                          {isPaid
+                            ? 'border-orange-300 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20'
+                            : 'border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20'}"
+                        on:click={() => initCancel(order)}
                       >
-                        <XCircleIcon size={14} weight="fill" />
+                        {isPaid ? '⚠ Cancel & Refund' : 'Cancel'}
                       </button>
                     {/if}
 
-                    {#if order.status === 'delivered' || order.status === 'cancelled'}
-                      <span class="text-[10px] text-muted-foreground px-1 select-none">—</span>
+                    <!-- Mark refund sent (for cancelled eSewa orders with pending refund) -->
+                    {#if order.status === 'cancelled' && isPaid && order.refundStatus === 'pending'}
+                      <button
+                        class="px-3 py-1.5 rounded-lg text-xs font-semibold text-white hover:opacity-90 transition-opacity"
+                        style="background-color: #16a34a;"
+                        on:click={() => markRefundSent(order)}
+                      >
+                        ✓ Mark Refund Sent
+                      </button>
                     {/if}
+
                   </div>
                 </div>
-              {/each}
-            </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
 
-            <!-- Footer row inside the scroll area -->
-            <div class="sticky bottom-0 px-4 py-2 border-t border-border bg-card/95 backdrop-blur-sm flex items-center justify-between flex-shrink-0">
-              <span class="text-[11px] text-muted-foreground">
-                {filteredOrders.length} {activeTab} order{filteredOrders.length !== 1 ? 's' : ''} this week
-              </span>
-              {#if activeTab === 'delivered' && filteredOrders.length > 0}
-                <span class="text-[11px] font-bold" style="color:#FF6B35;">
-                  Week total: Rs.{filteredOrders.reduce((s, o) => s + (o.totalAmount || 0), 0).toFixed(0)}
-                </span>
-              {:else if activeTab === 'scheduled' && filteredOrders.length > 0}
-                <span class="text-[11px] font-bold" style="color:#8B5CF6;">
-                  Upcoming value: Rs.{filteredOrders.reduce((s, o) => s + (o.totalAmount || 0), 0).toFixed(0)}
-                </span>
-              {/if}
+      <!-- Income Graph -->
+      <div class="bg-card border border-border rounded-2xl overflow-hidden">
+        <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4 flex-wrap">
+          <div class="flex items-center gap-2">
+            <TrendingUp class="w-4 h-4" style="color: #FF6B35;" />
+            <h2 class="font-bold text-foreground">Income</h2>
+            <span class="text-xs text-muted-foreground">(delivered orders only)</span>
+          </div>
+          <div class="flex gap-1 bg-muted rounded-lg p-1">
+            {#each [['7','7d'], ['14','14d'], ['30','30d']] as [val, label]}
+              <button
+                class="px-3 py-1 rounded-md text-xs font-semibold transition-colors {graphRange === val ? 'text-white' : 'text-muted-foreground hover:text-foreground'}"
+                style={graphRange === val ? 'background-color: #FF6B35;' : ''}
+                on:click={() => graphRange = val}
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="flex gap-4 px-5 pt-4 pb-2 flex-wrap">
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Total ({graphRange}d)</span>
+            <span class="text-lg font-bold text-foreground">Rs. {totalIncome.toFixed(0)}</span>
+          </div>
+          <div class="w-px bg-border self-stretch mx-1"></div>
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Daily avg</span>
+            <span class="text-lg font-bold text-foreground">Rs. {avgIncome.toFixed(0)}</span>
+          </div>
+          <div class="w-px bg-border self-stretch mx-1"></div>
+          <div class="flex flex-col">
+            <span class="text-xs text-muted-foreground">Best day</span>
+            <span class="text-lg font-bold text-foreground">
+              Rs. {Math.max(...incomeData.map(d => d.amount)).toFixed(0)}
+            </span>
+          </div>
+        </div>
+
+        <div class="px-5 pb-5 pt-2">
+          {#if loading}
+            <div class="h-40 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>
+          {:else if totalIncome === 0}
+            <div class="h-40 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+              <TrendingUp class="w-8 h-8 opacity-30" />
+              <p class="text-sm">No income in this period yet</p>
             </div>
+          {:else}
+            <div class="flex gap-2 items-end" style="height: 160px;">
+              <div class="flex flex-col justify-between h-full text-right pr-2 flex-shrink-0" style="width:52px">
+                <span class="text-[10px] text-muted-foreground">Rs.{maxIncome.toFixed(0)}</span>
+                <span class="text-[10px] text-muted-foreground">Rs.{(maxIncome/2).toFixed(0)}</span>
+                <span class="text-[10px] text-muted-foreground">0</span>
+              </div>
+
+              <div class="flex-1 flex items-end gap-[3px] h-full relative">
+                <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+                  <div class="border-t border-dashed border-border opacity-50"></div>
+                  <div class="border-t border-dashed border-border opacity-50"></div>
+                  <div class="border-t border-border opacity-30"></div>
+                </div>
+
+                {#each incomeData as bar}
+                  {@const heightPct = maxIncome > 0 ? (bar.amount / maxIncome) * 100 : 0}
+                  {@const isToday = bar.date === new Date().toLocaleDateString('en-CA')}
+                  <div
+                    class="relative flex-1 flex flex-col items-center justify-end h-full group cursor-default"
+                    role="img"
+                    aria-label="{bar.label}: Rs. {bar.amount}"
+                    on:mouseenter={(e) => onBarEnter(e, bar)}
+                    on:mouseleave={onBarLeave}
+                    on:mousemove={onBarMove}
+                  >
+                    <div
+                      class="w-full rounded-t-md transition-all duration-300 group-hover:opacity-80"
+                      style="
+                        height: {Math.max(heightPct, bar.amount > 0 ? 4 : 0)}%;
+                        background-color: {isToday ? '#FF6B35' : '#FF6B3560'};
+                        min-height: {bar.amount > 0 ? '4px' : '0'};
+                      "
+                    ></div>
+
+                    {#if incomeData.length <= 10 || incomeData.indexOf(bar) % Math.ceil(incomeData.length / 8) === 0 || isToday}
+                      <span
+                        class="absolute -bottom-5 text-[9px] whitespace-nowrap {isToday ? 'font-bold' : 'text-muted-foreground'}"
+                        style={isToday ? 'color: #FF6B35;' : ''}
+                      >
+                        {isToday ? 'Today' : bar.label}
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+            <div class="h-6"></div>
           {/if}
         </div>
       </div>
@@ -508,18 +863,3 @@
     </div>
   </main>
 </div>
-
-<style>
-  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-  .scrollbar-hide::-webkit-scrollbar { display: none; }
-
-  .skeleton {
-    background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--secondary)) 50%, hsl(var(--muted)) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.4s ease-in-out infinite;
-  }
-  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
-  .animate-pulse { animation: pulse 2s ease-in-out infinite; }
-</style>

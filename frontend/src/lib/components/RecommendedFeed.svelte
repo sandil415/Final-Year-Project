@@ -56,7 +56,6 @@
   });
 
   async function loadForYou() {
-    loadingFor = true;
     try {
       personalised = userId
         ? await getRecommendations(userId, { limit: 6 })

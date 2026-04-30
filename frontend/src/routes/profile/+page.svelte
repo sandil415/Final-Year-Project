@@ -61,6 +61,7 @@
   // Menu
   let menuItems = [], menuLoaded = false;
   let activeCategory = null;
+  let favoriteRecords = {};
 
   // Menu item form — now uses MenuItemForm component
   let showMenuForm = false, editingMenuItem = null;
@@ -102,7 +103,7 @@
     else await loadProfile(uname);
 
     if (user) {
-      await Promise.all([loadFollowData(), loadPosts(), loadRecipes()]);
+      await Promise.all([loadFollowData(), loadPosts(), loadRecipes(), loadFavoriteIds()]);
       if (user.accountType === 'business') {
         cacheSellerRecord(user);
         await loadMenu();
@@ -169,6 +170,45 @@
       menuItems = r; menuLoaded = true;
       if (!activeCategory && r.length) activeCategory = r[0].category || 'Other';
     } catch (_) { menuItems = []; }
+  }
+
+  async function loadFavoriteIds() {
+    try {
+      const records = await pb.collection('favorites').getFullList({
+        filter: `user = "${currentUser.id}"`,
+        fields: 'id,menuItem',
+        requestKey: 'profile-favorites',
+      });
+      favoriteRecords = Object.fromEntries(records.map((f) => [f.menuItem, f.id]));
+    } catch (_) {
+      favoriteRecords = {};
+    }
+  }
+
+  function isFavorite(itemId) {
+    return !!favoriteRecords[itemId];
+  }
+
+  async function toggleFavorite(item) {
+    if (!item?.id || !currentUser?.id) return;
+    const existingId = favoriteRecords[item.id];
+    try {
+      if (existingId) {
+        await pb.collection('favorites').delete(existingId);
+        const { [item.id]: _removed, ...rest } = favoriteRecords;
+        favoriteRecords = rest;
+        showToast('Removed from favourites');
+      } else {
+        const saved = await pb.collection('favorites').create({
+          user: currentUser.id,
+          menuItem: item.id,
+        });
+        favoriteRecords = { ...favoriteRecords, [item.id]: saved.id };
+        showToast('Added to favourites');
+      }
+    } catch (err) {
+      showToast(err?.response?.message || 'Could not update favourites', 'error');
+    }
   }
 
   async function loadRecipes() {
@@ -912,7 +952,15 @@
                             <button class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 text-red-500" on:click={() => deleteMenuItem(item)}><TrashIcon size={14}/></button>
                           </div>
                         {:else if item.isAvailable}
-                          <div class="flex-shrink-0">
+                          <div class="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              class="w-8 h-8 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                              on:click|stopPropagation={() => toggleFavorite(item)}
+                              title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                              aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                            >
+                              <HeartIcon size={15} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                            </button>
                             {#if inCartQty === 0}
                               <button class="px-3 py-1.5 rounded-xl text-white text-sm font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>
                             {:else if hasMods}
@@ -1010,8 +1058,16 @@
                                 <button class="p-1 rounded hover:bg-muted text-muted-foreground" on:click={() => openEditMenuItem(item)}><PencilSimpleIcon size={12}/></button>
                                 <button class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950/20 text-red-500" on:click={() => deleteMenuItem(item)}><TrashIcon size={12}/></button>
                               </div>
-                            {:else if item.isAvailable}
-                              <div class="flex-shrink-0">
+                        {:else if item.isAvailable}
+                              <div class="flex items-center gap-1 flex-shrink-0">
+                                <button
+                                  class="w-6 h-6 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                                  on:click|stopPropagation={() => toggleFavorite(item)}
+                                  title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                  aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                >
+                                  <HeartIcon size={12} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                                </button>
                                 {#if inCartQty === 0}
                                   <button class="px-2 py-1 rounded-lg text-white text-[11px] font-semibold hover:opacity-90"
                                     style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>

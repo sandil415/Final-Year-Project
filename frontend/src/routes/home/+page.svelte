@@ -178,9 +178,6 @@
             <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all" on:click={goto('/create')}>
               CREATE YOUR POSTS
             </button>
-            <!-- <button class="cta-secondary px-8 py-4 border-2 border-border rounded-full font-bold hover:border-orange transition-all" on:click={goto('/profile/edit')}>
-              START SELLING FOOD
-            </button> -->
           </div>
         </div>
         
@@ -234,7 +231,7 @@
           on:click={() => goto('/home')}
         >
           <img
-            src={pb.files.getUrl(post, post.image)}
+            src={pb.files.getURL(post, post.image)}
             alt=""
             class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
             loading="lazy"
@@ -272,14 +269,6 @@
     <section class="max-w-7xl mx-auto px-6 py-16">
       <RecommendedFeed userId={currentUser?.id} />
     </section>
-
-
-  <!-- Debug Step -->
-  <!-- <div>
-    <button on:click={() => console.log(currentUser)}>
-  HELLO
-</button>
-  </div> -->
 
   <!-- Map Section -->
   <section class="max-w-7xl mx-auto px-6 py-16">
