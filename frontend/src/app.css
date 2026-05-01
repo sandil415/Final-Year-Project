@@ -32,7 +32,7 @@
     --accent: 0 0% 96.1%;
     --accent-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 75.1%;
+    --muted-foreground: 0 0% 45%;  /* was 75.1% — darkened for light mode readability */
     --border: 0 0% 89.8%;
     --app-primary: 16 100% 60%;
     --activeColor: 120 100% 50%;
@@ -50,7 +50,7 @@
       --accent: 0 0% 14.9%;
       --accent-foreground: 0 0% 98%;
       --muted: 0 0% 14.9%;
-      --muted-foreground: 0 0% 75%;
+      --muted-foreground: 0 0% 75%;  /* kept for dark mode — lighter text on dark bg */
       --border: 0 0% 14.9%;
       --app-primary: 16 100% 60%;
       --activeColor: 120 100% 50%;
@@ -118,9 +118,8 @@
 .title {
   font-weight: 700;
   line-height: 1.1;
-  letter-spacing: -0.02em;       /* small negative tracking = cleaner big text */
+  letter-spacing: -0.02em;
   font-size: clamp(1.75rem, 4vw + 1rem, 3rem);
-  /* min: 28px, mid grows with viewport, max: 48px */
   margin-bottom: 0.5em;
 }
 
@@ -130,7 +129,6 @@
   line-height: 1.6;
   letter-spacing: 0.01em;
   font-size: clamp(1rem, 1vw + 0.5rem, 1.25rem);
-  /* min: 16px, max: 20px */
   color: #333;
 }
 
@@ -166,7 +164,7 @@
   --accent: 0 0% 96.1%;
   --accent-foreground: 0 0% 9%;
   --muted: 0 0% 96.1%;
-  --muted-foreground: 0 0% 75.1%;
+  --muted-foreground: 0 0% 45%;  /* was 75.1% — darkened for light mode readability */
   --border: 0 0% 89.8%;
   --app-primary: 16 100% 60%;
   --activeColor: 120 100% 50%;
@@ -182,7 +180,7 @@
   --accent: 0 0% 14.9%;
   --accent-foreground: 0 0% 98%;
   --muted: 0 0% 14.9%;
-  --muted-foreground: 0 0% 75%;
+  --muted-foreground: 0 0% 75%;  /* kept for dark mode */
   --border: 0 0% 14.9%;
   --app-primary: 16 100% 60%;
   --activeColor: 120 100% 50%;
@@ -192,8 +190,6 @@
    AUTH & ONBOARDING — additions only, nothing above is touched
    ============================================================ */
 
-/* Shared spinner used across auth pages, modals, and loaders.
-   Defined globally so individual <style> blocks can be removed. */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -201,15 +197,12 @@
   animation: spin 1s linear infinite;
 }
 
-/* Shared input style for auth pages (signup, setup-profile, login).
-   Avoids repeating 8-class chains on every <input> / <textarea>.
-   Usage: class="auth-input" — add mb-* separately per element. */
 .auth-input {
   width: 100%;
-  border-radius: 0.75rem;             /* rounded-xl */
+  border-radius: 0.75rem;
   border: 1px solid hsl(var(--border));
   background-color: hsl(var(--background));
-  padding: 0.75rem 1rem;              /* py-3 px-4 */
+  padding: 0.75rem 1rem;
   color: hsl(var(--foreground));
   font-size: 0.875rem;
   line-height: 1.5;
@@ -241,9 +234,7 @@
 .leaflet-popup-pane {
   z-index: 38 !important;
 }
-/* auth-input-white: always white background with dark text.
-   Used on signup / setup-profile so inputs are clearly readable in
-   both light and dark mode — mirroring the original login page style. */
+
 .auth-input-white {
   width: 100%;
   border-radius: 0.75rem;
@@ -265,4 +256,25 @@
 }
 .auth-input-white.pr-12 {
   padding-right: 3rem;
+}
+
+/* ── Save/Bookmark button stable width ──────────────────────────────────────
+   Prevents the "Save" ↔ "Saved" button in search results from jumping width.
+   Apply .btn-save to the bookmark button — width is locked to fit "Saved". */
+.btn-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;           /* gap-1.5 */
+  min-width: 72px;         /* wide enough for "Saved" with icon — never shrinks */
+  padding: 0.375rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

@@ -62,6 +62,7 @@
   let menuItems = [], menuLoaded = false;
   let activeCategory = null;
   let favoriteRecords = {};
+  let favoritePending = {};
 
   // Menu item form — now uses MenuItemForm component
   let showMenuForm = false, editingMenuItem = null;
@@ -190,15 +191,19 @@
   }
 
   async function toggleFavorite(item) {
-    if (!item?.id || !currentUser?.id) return;
+    if (!item?.id || !currentUser?.id || favoritePending[item.id]) return;
     const existingId = favoriteRecords[item.id];
+    const previousRecords = favoriteRecords;
+    favoritePending = { ...favoritePending, [item.id]: true };
+
     try {
       if (existingId) {
-        await pb.collection('favorites').delete(existingId);
         const { [item.id]: _removed, ...rest } = favoriteRecords;
         favoriteRecords = rest;
+        await pb.collection('favorites').delete(existingId);
         showToast('Removed from favourites');
       } else {
+        favoriteRecords = { ...favoriteRecords, [item.id]: `pending-${item.id}` };
         const saved = await pb.collection('favorites').create({
           user: currentUser.id,
           menuItem: item.id,
@@ -207,7 +212,11 @@
         showToast('Added to favourites');
       }
     } catch (err) {
+      favoriteRecords = previousRecords;
       showToast(err?.response?.message || 'Could not update favourites', 'error');
+    } finally {
+      const { [item.id]: _done, ...restPending } = favoritePending;
+      favoritePending = restPending;
     }
   }
 
@@ -954,12 +963,15 @@
                         {:else if item.isAvailable}
                           <div class="flex items-center gap-2 flex-shrink-0">
                             <button
-                              class="w-8 h-8 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                              class="w-8 h-8 rounded-full border flex items-center justify-center transition-colors disabled:opacity-70 disabled:cursor-not-allowed hover:bg-muted"
                               on:click|stopPropagation={() => toggleFavorite(item)}
-                              title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
-                              aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                              title={favoritePending[item.id] ? 'Updating favourite' : isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                              aria-label={favoritePending[item.id] ? 'Updating favourite' : isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                              aria-pressed={isFavorite(item.id)}
+                              disabled={favoritePending[item.id]}
+                              style={isFavorite(item.id) ? 'border-color:#EF4444;background-color:#FEE2E2;color:#EF4444;' : 'border-color:var(--border);background-color:transparent;color:#6B7280;'}
                             >
-                              <HeartIcon size={15} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                              <HeartIcon size={15} weight={isFavorite(item.id) ? 'fill' : 'regular'} class={favoritePending[item.id] ? 'animate-pulse' : ''} style={isFavorite(item.id) ? 'color:#EF4444;' : 'color:#6B7280;'}/>
                             </button>
                             {#if inCartQty === 0}
                               <button class="px-3 py-1.5 rounded-xl text-white text-sm font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>
@@ -1061,12 +1073,15 @@
                         {:else if item.isAvailable}
                               <div class="flex items-center gap-1 flex-shrink-0">
                                 <button
-                                  class="w-6 h-6 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                                  class="w-6 h-6 rounded-full border flex items-center justify-center transition-colors disabled:opacity-70 disabled:cursor-not-allowed hover:bg-muted"
                                   on:click|stopPropagation={() => toggleFavorite(item)}
-                                  title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
-                                  aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                  title={favoritePending[item.id] ? 'Updating favourite' : isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                  aria-label={favoritePending[item.id] ? 'Updating favourite' : isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                  aria-pressed={isFavorite(item.id)}
+                                  disabled={favoritePending[item.id]}
+                                  style={isFavorite(item.id) ? 'border-color:#EF4444;background-color:#FEE2E2;color:#EF4444;' : 'border-color:var(--border);background-color:transparent;color:#6B7280;'}
                                 >
-                                  <HeartIcon size={12} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                                  <HeartIcon size={12} weight={isFavorite(item.id) ? 'fill' : 'regular'} class={favoritePending[item.id] ? 'animate-pulse' : ''} style={isFavorite(item.id) ? 'color:#EF4444;' : 'color:#6B7280;'}/>
                                 </button>
                                 {#if inCartQty === 0}
                                   <button class="px-2 py-1 rounded-lg text-white text-[11px] font-semibold hover:opacity-90"

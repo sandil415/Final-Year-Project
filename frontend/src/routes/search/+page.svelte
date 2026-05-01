@@ -5,7 +5,16 @@
   import { goto } from '$app/navigation';
   import Header from '$lib/components/Header.svelte';
   import PostModal from '$lib/components/PostModal.svelte';
-  import { ArrowLeftIcon, MagnifyingGlassIcon, FireIcon, HeartIcon, ChatCircleIcon } from 'phosphor-svelte';
+  import {
+    ArrowLeftIcon,
+    MagnifyingGlassIcon,
+    FireIcon,
+    HeartIcon,
+    ChatCircleIcon,
+    CheckCircleIcon,
+    WarningCircleIcon,
+    BookmarkSimpleIcon,
+  } from 'phosphor-svelte';
 
   let query = '';
   let userResults = [];
@@ -19,8 +28,17 @@
   let currentUser = null;
   let selectedPostId = null;
   let favoriteRecords = {};
+  let favoritePending = {};
+  let toast = null;
 
   let debounceTimer = null;
+
+  function showToast(msg, type = 'success') {
+    toast = { msg, type };
+    setTimeout(() => {
+      if (toast?.msg === msg) toast = null;
+    }, 3500);
+  }
 
   function normalizeSearchText(value) {
     return String(value ?? '')
@@ -38,15 +56,11 @@
   function matchesSearch(queryText, ...fields) {
     const normalizedQuery = normalizeSearchText(queryText);
     if (!normalizedQuery) return false;
-
     const combined = normalizeSearchText(fields.filter(Boolean).join(' '));
     if (!combined) return false;
-
-    // Very short queries should match the start of a word, not any random substring.
     if (normalizedQuery.length < 3) {
       return tokenizeSearchText(combined).some((token) => token.startsWith(normalizedQuery));
     }
-
     return combined.includes(normalizedQuery);
   }
 
@@ -65,6 +79,12 @@
     if (username) goto(`/profile/${username}`);
   }
 
+  function markMenuResultFavorite(itemId, isFav) {
+    menuResults = menuResults.map((entry) =>
+      entry.id === itemId ? { ...entry, _isFavorite: isFav } : entry
+    );
+  }
+
   async function loadFavoriteIds() {
     try {
       const records = await pb.collection('favorites').getFullList({
@@ -73,32 +93,75 @@
         requestKey: 'search-favorites',
       });
       favoriteRecords = Object.fromEntries(records.map((f) => [f.menuItem, f.id]));
+      menuResults = menuResults.map((entry) => ({
+        ...entry,
+        _isFavorite: !!favoriteRecords[entry.id],
+      }));
     } catch (_) {
       favoriteRecords = {};
     }
   }
 
   function isFavorite(itemId) {
+    const match = menuResults.find((entry) => entry.id === itemId);
+    if (match && typeof match._isFavorite === 'boolean') return match._isFavorite;
     return !!favoriteRecords[itemId];
   }
 
+  async function syncFavoriteItem(itemId) {
+    if (!itemId || !currentUser?.id) return false;
+    try {
+      const record = await pb.collection('favorites').getFirstListItem(
+        `user = "${currentUser.id}" && menuItem = "${itemId}"`,
+        { fields: 'id,menuItem', requestKey: `search-favorite-${itemId}` }
+      );
+      favoriteRecords = { ...favoriteRecords, [itemId]: record.id };
+      markMenuResultFavorite(itemId, true);
+      return true;
+    } catch (_) {
+      const { [itemId]: _removed, ...rest } = favoriteRecords;
+      favoriteRecords = rest;
+      markMenuResultFavorite(itemId, false);
+      return false;
+    }
+  }
+
   async function toggleFavorite(item) {
-    if (!item?.id || !currentUser?.id) return;
+    if (!item?.id || !currentUser?.id || favoritePending[item.id]) return;
     const existingId = favoriteRecords[item.id];
+    const previousRecords = favoriteRecords;
+    favoritePending = { ...favoritePending, [item.id]: true };
+
     try {
       if (existingId) {
-        await pb.collection('favorites').delete(existingId);
         const { [item.id]: _removed, ...rest } = favoriteRecords;
         favoriteRecords = rest;
+        markMenuResultFavorite(item.id, false);
+        await pb.collection('favorites').delete(existingId);
+        showToast('Removed from saved');
       } else {
+        favoriteRecords = { ...favoriteRecords, [item.id]: `pending-${item.id}` };
+        markMenuResultFavorite(item.id, true);
         const saved = await pb.collection('favorites').create({
           user: currentUser.id,
           menuItem: item.id,
         });
         favoriteRecords = { ...favoriteRecords, [item.id]: saved.id };
+        showToast('Saved');
       }
     } catch (err) {
+      const recovered = await syncFavoriteItem(item.id);
+      if (recovered) {
+        showToast('Saved');
+      } else {
+        favoriteRecords = previousRecords;
+        markMenuResultFavorite(item.id, !!previousRecords[item.id]);
+        showToast(err?.response?.message || 'Could not update saved items', 'error');
+      }
       console.error('Failed to update favorite:', err);
+    } finally {
+      const { [item.id]: _done, ...restPending } = favoritePending;
+      favoritePending = restPending;
     }
   }
 
@@ -138,39 +201,25 @@
         return;
       }
 
-      // ── FIX: Batch fetch all likes + comments in just 2 requests ──────────────
-      // Build one filter string covering all candidate post IDs
       const idList = candidates.map(p => `post = "${p.id}"`).join(' || ');
-
       const [allLikes, allComments] = await Promise.all([
         pb.collection('likes').getFullList({ filter: idList, fields: 'post' }),
         pb.collection('comments').getFullList({ filter: idList, fields: 'post' }),
       ]);
 
-      // Count per post id using Maps
       const likeCountMap = new Map();
       const commentCountMap = new Map();
+      for (const like of allLikes) likeCountMap.set(like.post, (likeCountMap.get(like.post) ?? 0) + 1);
+      for (const comment of allComments) commentCountMap.set(comment.post, (commentCountMap.get(comment.post) ?? 0) + 1);
 
-      for (const like of allLikes) {
-        likeCountMap.set(like.post, (likeCountMap.get(like.post) ?? 0) + 1);
-      }
-      for (const comment of allComments) {
-        commentCountMap.set(comment.post, (commentCountMap.get(comment.post) ?? 0) + 1);
-      }
-
-      const withStats = candidates.map(post => {
-        const likes    = likeCountMap.get(post.id) ?? 0;
-        const comments = commentCountMap.get(post.id) ?? 0;
-        return {
-          ...post,
-          _likes: likes,
-          _comments: comments,
-          _score: post._score + likes * 3 + comments * 2,
-        };
-      });
+      const withStats = candidates.map(post => ({
+        ...post,
+        _likes:    likeCountMap.get(post.id) ?? 0,
+        _comments: commentCountMap.get(post.id) ?? 0,
+        _score:    post._score + (likeCountMap.get(post.id) ?? 0) * 3 + (commentCountMap.get(post.id) ?? 0) * 2,
+      }));
 
       explorePosts = withStats.sort((a, b) => b._score - a._score).slice(0, 20);
-
     } catch (err) {
       console.error('Failed to load explore posts:', err);
       explorePosts = [];
@@ -179,8 +228,6 @@
     }
   }
 
-  // ── Called by PostModal when a like is toggled ─────────────────────────────
-  // delta: +1 when liked, -1 when unliked
   function onLikeToggled(postId, delta) {
     explorePosts = explorePosts.map(p =>
       p.id === postId
@@ -231,6 +278,7 @@
 
       menuResults = menuRes.items
         .filter((item) => matchesSearch(safe, item.name, item.description, item.category))
+        .map((item) => ({ ...item, _isFavorite: !!favoriteRecords[item.id] }))
         .slice(0, 10);
 
       recipeResults = recipesRes.items
@@ -252,17 +300,38 @@
 </script>
 
 <div class="min-h-screen flex flex-col bg-background text-foreground">
+  {#if toast}
+    <div
+      class="fixed bottom-6 right-6 z-[200] flex items-center gap-2 px-5 py-3 rounded-xl shadow-2xl text-sm font-semibold text-white pointer-events-none"
+      style={toast.type === 'error' ? 'background:#EF4444;' : 'background:#16a34a;'}
+    >
+      {#if toast.type === 'error'}
+        <WarningCircleIcon size={16} weight="fill" />
+      {:else}
+        <CheckCircleIcon size={16} weight="fill" />
+      {/if}
+      {toast.msg}
+    </div>
+  {/if}
+
   <Header/>
 
   <main class="flex-1">
     <div class="max-w-2xl mx-auto px-4 py-6">
 
+      <!-- Search bar -->
       <div class="flex items-center gap-3 mb-6">
-        <button class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl hover:bg-muted transition-colors" on:click={goBack}>
+        <button
+          class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl hover:bg-muted transition-colors"
+          on:click={goBack}
+        >
           <ArrowLeftIcon size={20} weight="bold"/>
         </button>
         <div class="flex-1 relative">
-          <MagnifyingGlassIcon size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"/>
+          <MagnifyingGlassIcon
+            size={16}
+            class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+          />
           <input
             type="text"
             placeholder="Search people, dishes, recipes…"
@@ -273,17 +342,22 @@
             spellcheck="false"
           />
           {#if loading}
-            <div class="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style="border-color:#FF6B35;border-top-color:transparent;"></div>
+            <div
+              class="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-t-transparent animate-spin"
+              style="border-color:#FF6B35;border-top-color:transparent;"
+            ></div>
           {/if}
         </div>
       </div>
 
+      <!-- ── SEARCH RESULTS ── -->
       {#if isSearching}
 
         {#if searchError}
           <p class="text-sm text-red-500 mb-4">{searchError}</p>
         {/if}
 
+        <!-- People & Restaurants -->
         {#if userResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">People & Restaurants</p>
@@ -302,11 +376,16 @@
                     <div class="flex items-center gap-2">
                       <span class="font-medium text-sm">{u.username}</span>
                       {#if u.accountType === 'business'}
-                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white flex-shrink-0" style="background-color:#FF6B35;">Business</span>
+                        <span
+                          class="px-1.5 py-0.5 rounded-full text-[10px] font-bold text-white flex-shrink-0"
+                          style="background-color:#FF6B35;"
+                        >Business</span>
                       {/if}
                     </div>
                     {#if u.businessName}
-                      <span class="text-xs text-muted-foreground truncate block">{u.businessName}{u.businessType ? ` · ${u.businessType}` : ''}</span>
+                      <span class="text-xs text-muted-foreground truncate block">
+                        {u.businessName}{u.businessType ? ` · ${u.businessType}` : ''}
+                      </span>
                     {:else if u.bio}
                       <span class="text-xs text-muted-foreground truncate block">{u.bio}</span>
                     {/if}
@@ -317,18 +396,27 @@
           </div>
         {/if}
 
+        <!-- Dishes & Menu Items -->
         {#if menuResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Dishes & Menu Items</p>
             <div class="space-y-1">
               {#each menuResults as item (item.id)}
+                {@const saved = isFavorite(item.id)}
+                {@const pending = !!favoritePending[item.id]}
                 <div class="w-full flex items-center gap-2 rounded-xl hover:bg-muted transition-colors">
+
+                  <!-- Clickable row area -->
                   <button
                     class="flex-1 flex items-center gap-3 p-3 text-left min-w-0"
                     on:click={() => openProfile(item.expand?.seller?.username)}
                   >
                     {#if item.image && item.image.length > 0}
-                      <img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-12 h-12 rounded-xl object-cover flex-shrink-0"/>
+                      <img
+                        src={pb.files.getUrl(item, item.image)}
+                        alt={item.name}
+                        class="w-12 h-12 rounded-xl object-cover flex-shrink-0"
+                      />
                     {:else}
                       <div class="w-12 h-12 rounded-xl bg-muted flex items-center justify-center text-xl flex-shrink-0">🍽️</div>
                     {/if}
@@ -336,20 +424,40 @@
                       <span class="font-medium text-sm block">{item.name}</span>
                       <div class="flex items-center gap-2 mt-0.5">
                         <span class="text-sm font-bold" style="color:#FF6B35;">Rs. {item.price}</span>
-                        {#if !item.isAvailable}<span class="text-xs text-muted-foreground">(Unavailable)</span>{/if}
+                        {#if !item.isAvailable}
+                          <span class="text-xs text-muted-foreground">(Unavailable)</span>
+                        {/if}
                       </div>
                       {#if item.expand?.seller}
-                        <span class="text-xs text-muted-foreground truncate block">by {item.expand.seller.businessName || item.expand.seller.username}</span>
+                        <span class="text-xs text-muted-foreground truncate block">
+                          by {item.expand.seller.businessName || item.expand.seller.username}
+                        </span>
                       {/if}
                     </div>
                   </button>
+
+                  <!--
+                    ── Bookmark / save button ──
+                    Fixed min-width via .btn-save class so "Save" ↔ "Saved"
+                    never causes a layout reflow. Saved = orange fill.
+                    Unsaved = muted bg with foreground text (readable in both modes).
+                  -->
                   <button
-                    class="w-10 h-10 mr-2 rounded-full border border-border flex items-center justify-center hover:bg-background transition-colors flex-shrink-0"
+                    class="btn-save mr-2"
                     on:click|stopPropagation={() => toggleFavorite(item)}
-                    title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
-                    aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                    title={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                    aria-label={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                    aria-pressed={saved}
+                    disabled={pending}
+                    style={saved
+                      ? 'background-color:#FF6B35;color:white;'
+                      : 'background-color:hsl(var(--muted));color:hsl(var(--foreground));border:1px solid hsl(var(--border));'}
                   >
-                    <HeartIcon size={17} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                    <BookmarkSimpleIcon
+                      size={13}
+                      weight={saved ? 'fill' : 'regular'}
+                    />
+                    {saved ? 'Saved' : 'Save'}
                   </button>
                 </div>
               {/each}
@@ -357,20 +465,30 @@
           </div>
         {/if}
 
+        <!-- Recipes -->
         {#if recipeResults.length > 0}
           <div class="mb-6">
             <p class="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Recipes</p>
             <div class="space-y-2">
               {#each recipeResults as recipe (recipe.id)}
-                {@const rtags = Array.isArray(recipe.tags) ? recipe.tags : (() => { try { return JSON.parse(recipe.tags || '[]'); } catch { return []; } })()}
+                {@const rtags = Array.isArray(recipe.tags)
+                  ? recipe.tags
+                  : (() => { try { return JSON.parse(recipe.tags || '[]'); } catch { return []; } })()}
                 <button
                   class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-muted transition-colors text-left"
                   on:click={() => openProfile(recipe.expand?.user?.username)}
                 >
                   {#if recipe.cover_image}
-                    <img src={pb.files.getUrl(recipe, recipe.cover_image)} alt={recipe.title} class="w-12 h-12 rounded-xl object-cover flex-shrink-0"/>
+                    <img
+                      src={pb.files.getUrl(recipe, recipe.cover_image)}
+                      alt={recipe.title}
+                      class="w-12 h-12 rounded-xl object-cover flex-shrink-0"
+                    />
                   {:else}
-                    <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 text-lg" style="background-color:#FF6B3515;">📖</div>
+                    <div
+                      class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 text-lg"
+                      style="background-color:#FF6B3515;"
+                    >📖</div>
                   {/if}
                   <div class="flex-1 min-w-0">
                     <span class="font-medium text-sm block truncate">{recipe.title}</span>
@@ -391,16 +509,18 @@
           </div>
         {/if}
 
+        <!-- No results -->
         {#if !loading && !searchError && !hasResults}
           <div class="text-center py-16">
-            <p class="text-3xl mb-3 flex items-center justify-center">
-              <MagnifyingGlassIcon></MagnifyingGlassIcon>
-            </p>
+            <div class="flex items-center justify-center mb-3 text-muted-foreground">
+              <MagnifyingGlassIcon size={32} weight="light" />
+            </div>
             <p class="text-sm text-muted-foreground">No results for "<strong>{query}</strong>"</p>
             <p class="text-xs text-muted-foreground mt-2">Try a shorter or different keyword</p>
           </div>
         {/if}
 
+      <!-- ── EXPLORE GRID ── -->
       {:else}
         <div class="flex items-center gap-2 mb-4">
           <h2 class="font-bold text-sm">Explore</h2>
@@ -444,7 +564,9 @@
                   </div>
                   <div class="flex items-center gap-1.5">
                     <img
-                      src={post.expand?.user?.avatar ? pb.files.getUrl(post.expand.user, post.expand.user.avatar) : '/images/profilePlaceholder.jpg'}
+                      src={post.expand?.user?.avatar
+                        ? pb.files.getUrl(post.expand.user, post.expand.user.avatar)
+                        : '/images/profilePlaceholder.jpg'}
                       alt=""
                       class="w-5 h-5 rounded-full object-cover border border-white/40 flex-shrink-0"
                     />
@@ -452,7 +574,10 @@
                   </div>
                 </div>
                 {#if isFeatured && post._score > 50}
-                  <div class="absolute top-2 left-2 flex items-center gap-1 px-2 py-1 rounded-full text-white text-xs font-bold" style="background-color:#FF6B35;">
+                  <div
+                    class="absolute top-2 left-2 flex items-center gap-1 px-2 py-1 rounded-full text-white text-xs font-bold"
+                    style="background-color:#FF6B35;"
+                  >
                     <FireIcon size={10} weight="fill"/>Hot
                   </div>
                 {/if}

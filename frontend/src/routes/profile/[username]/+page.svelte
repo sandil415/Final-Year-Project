@@ -17,7 +17,7 @@
     XIcon, BookOpenTextIcon, PencilSimpleIcon, TrashIcon,
     ToggleLeftIcon, ToggleRightIcon,
     CheckCircleIcon, WarningCircleIcon,
-    SignOutIcon,
+    SignOutIcon, BookmarkSimpleIcon,
   } from 'phosphor-svelte';
   import {
     cart, cartCount, cartTotal,
@@ -52,8 +52,9 @@
 
   // Menu
   let menuItems = [], menuLoaded = false, activeCategory = null;
-  let favoriteRecords = {};
   let showMenuForm = false, editingMenuItem = null;
+  let favoriteRecords = {};
+  let favoritePending = {};
 
   // Modifier modal
   let showModModal = false, modModalItem = null, modSelections = {};
@@ -161,24 +162,32 @@
   }
 
   async function toggleFavorite(item) {
-    if (!item?.id || !currentUser?.id) return;
+    if (!item?.id || !currentUser?.id || favoritePending[item.id]) return;
     const existingId = favoriteRecords[item.id];
+    const previousRecords = favoriteRecords;
+    favoritePending = { ...favoritePending, [item.id]: true };
+
     try {
       if (existingId) {
-        await pb.collection('favorites').delete(existingId);
         const { [item.id]: _removed, ...rest } = favoriteRecords;
         favoriteRecords = rest;
-        showToast('Removed from favourites');
+        await pb.collection('favorites').delete(existingId);
+        showToast('Removed from saved');
       } else {
+        favoriteRecords = { ...favoriteRecords, [item.id]: `pending-${item.id}` };
         const saved = await pb.collection('favorites').create({
           user: currentUser.id,
           menuItem: item.id,
         });
         favoriteRecords = { ...favoriteRecords, [item.id]: saved.id };
-        showToast('Added to favourites');
+        showToast('Saved');
       }
     } catch (err) {
-      showToast(err?.response?.message || 'Could not update favourites', 'error');
+      favoriteRecords = previousRecords;
+      showToast(err?.response?.message || 'Could not update saved items', 'error');
+    } finally {
+      const { [item.id]: _done, ...restPending } = favoritePending;
+      favoritePending = restPending;
     }
   }
 
@@ -266,7 +275,7 @@
     closeModModal();
   }
 
-  // ── Cart helpers (store mutations only — checkout is at /checkout) ────────────
+  // ── Cart helpers ──────────────────────────────────────────────────────────────
   function handleAddToCart(item) {
     if (parseMods(item).length) { openModModal(item); return; }
     addCartItem(item, 1, {}, []);
@@ -616,6 +625,8 @@
                     {#each items as item (item.id)}
                       {@const inCartQty = totalQtyInCart(item.id)}
                       {@const hasMods = parseMods(item).length > 0}
+                      {@const saved = isFavorite(item.id)}
+                      {@const pending = !!favoritePending[item.id]}
                       <div class="flex items-center gap-3 p-3 bg-card border border-border rounded-2xl {!item.isAvailable && !isOwnProfile ? 'opacity-50' : ''}">
                         {#if item.image}<img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-14 h-14 rounded-xl object-cover flex-shrink-0"/>
                         {:else}<div class="w-14 h-14 rounded-xl bg-muted flex items-center justify-center text-xl flex-shrink-0">🍽️</div>{/if}
@@ -637,13 +648,20 @@
                           </div>
                         {:else if item.isAvailable}
                           <div class="flex items-center gap-2 flex-shrink-0">
+                            <!-- ── Save pill button (replaces heart circle) ── -->
                             <button
-                              class="w-8 h-8 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                              class="btn-save"
                               on:click|stopPropagation={() => toggleFavorite(item)}
-                              title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
-                              aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                              title={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                              aria-label={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                              aria-pressed={saved}
+                              disabled={pending}
+                              style={saved
+                                ? 'background-color:#FF6B35;color:white;'
+                                : 'background-color:hsl(var(--muted));color:hsl(var(--foreground));border:1px solid hsl(var(--border));'}
                             >
-                              <HeartIcon size={15} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                              <BookmarkSimpleIcon size={13} weight={saved ? 'fill' : 'regular'}/>
+                              {saved ? 'Saved' : 'Save'}
                             </button>
                             {#if inCartQty === 0}
                               <button class="px-3 py-1.5 rounded-xl text-white text-sm font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>
@@ -702,6 +720,8 @@
                         {#each items as item (item.id)}
                           {@const inCartQty = totalQtyInCart(item.id)}
                           {@const hasMods = parseMods(item).length > 0}
+                          {@const saved = isFavorite(item.id)}
+                          {@const pending = !!favoritePending[item.id]}
                           <div class="flex items-center gap-2 p-2 rounded-xl border border-border bg-background {!item.isAvailable && !isOwnProfile ? 'opacity-50' : ''}">
                             {#if item.image}<img src={pb.files.getUrl(item, item.image)} alt={item.name} class="w-9 h-9 rounded-lg object-cover flex-shrink-0"/>
                             {:else}<div class="w-9 h-9 rounded-lg bg-muted flex items-center justify-center text-sm flex-shrink-0">🍽️</div>{/if}
@@ -716,13 +736,20 @@
                               </div>
                             {:else if item.isAvailable}
                               <div class="flex items-center gap-1 flex-shrink-0">
+                                <!-- ── Save pill button (sidebar, compact) ── -->
                                 <button
-                                  class="w-6 h-6 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors"
+                                  class="btn-save"
+                                  style={saved
+                                    ? 'background-color:#FF6B35;color:white;min-width:56px;padding:0.25rem 0.5rem;font-size:0.65rem;'
+                                    : 'background-color:hsl(var(--muted));color:hsl(var(--foreground));border:1px solid hsl(var(--border));min-width:56px;padding:0.25rem 0.5rem;font-size:0.65rem;'}
                                   on:click|stopPropagation={() => toggleFavorite(item)}
-                                  title={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
-                                  aria-label={isFavorite(item.id) ? 'Remove from favourites' : 'Add to favourites'}
+                                  title={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                                  aria-label={pending ? 'Updating…' : saved ? 'Remove from saved' : 'Save'}
+                                  aria-pressed={saved}
+                                  disabled={pending}
                                 >
-                                  <HeartIcon size={12} weight={isFavorite(item.id) ? 'fill' : 'regular'} style={isFavorite(item.id) ? 'color:#EF4444;' : ''}/>
+                                  <BookmarkSimpleIcon size={11} weight={saved ? 'fill' : 'regular'}/>
+                                  {saved ? 'Saved' : 'Save'}
                                 </button>
                                 {#if inCartQty === 0}
                                   <button class="px-2 py-1 rounded-lg text-white text-[11px] font-semibold hover:opacity-90" style="background-color:#FF6B35;" on:click={() => handleAddToCart(item)}>Add</button>
@@ -759,7 +786,7 @@
   {/if}
 </div>
 
-<!-- Floating checkout button — only for customers with items in cart -->
+<!-- Floating checkout button -->
 {#if !isOwnProfile && $cartCount > 0}
   <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
     <button
